@@ -5,7 +5,6 @@ from . import config, clients
 
 def encode_files():
     config.setup_logger()
-
     clients.encode_files()
 
 
