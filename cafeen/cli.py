@@ -4,11 +4,17 @@ from . import config, clients
 
 
 def encode_files():
-    config.setup_logger()
     clients.encode_files()
 
 
+def submit(sid):
+    getattr(clients, 'submit_' + str(sid))()
+
+
 def main():
+    config.setup_logger()
+
     fire.Fire({
-        'encode': encode_files
+        'encode': encode_files,
+        'submit': submit
     })

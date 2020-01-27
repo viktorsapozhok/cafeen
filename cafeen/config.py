@@ -11,6 +11,8 @@ path_to_test = path.join(root_dir, 'data', 'test.csv')
 path_to_train_enc = path.join(root_dir, 'data', 'train_enc.csv')
 path_to_test_enc = path.join(root_dir, 'data', 'test_enc.csv')
 
+path_to_data = path.join(root_dir, 'data')
+
 
 def setup_logger():
     """Configure logger

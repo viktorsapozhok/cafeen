@@ -1,22 +1,17 @@
 import logging
 
+import lightgbm as lgb
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder
 from tqdm import tqdm
 
-from cafeen import config
+from cafeen import config, steps
 
 logger = logging.getLogger('cafeen')
 
 
-def encode_files():
-    logger.info('reading train')
-    train = pd.read_csv(config.path_to_train)
-
-    logger.info('reading test')
-    test = pd.read_csv(config.path_to_test)
-
+def encode_data(train, test):
     obj_cols = [
         col for col in test.columns
         if (col not in ['id']) and (test[col].dtype == np.object)]
@@ -40,6 +35,23 @@ def encode_files():
         train[col] = encoder.transform(train[col])
         test[col] = encoder.transform(test[col])
 
-    logger.info('write to csv')
-    train.to_csv(config.path_to_train_enc)
-    test.to_csv(config.path_to_test_enc)
+    return train, test
+
+
+def submit_0():
+    logger.info('reading train')
+    train = pd.read_csv(config.path_to_train)
+
+    logger.info('reading test')
+    test = pd.read_csv(config.path_to_test)
+
+    train, test = encode_data(train, test)
+
+    features = [col for col in test.columns if col not in ['target', 'id']]
+
+    estimator = steps.Classifier(
+        lgb.LGBMClassifier(n_estimators=100),
+        n_splits=4)
+
+    submitter = steps.Submitter(estimator, config.path_to_data)
+    submitter.fit(train[features], train['target']).predict(test, features)
