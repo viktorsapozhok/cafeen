@@ -7,8 +7,8 @@ def encode_files():
     clients.encode_files()
 
 
-def submit(sid):
-    getattr(clients, 'submit_' + str(sid))()
+def submit(sid, n_estimators=100):
+    getattr(clients, 'submit_' + str(sid))(n_estimators)
 
 
 def main():
