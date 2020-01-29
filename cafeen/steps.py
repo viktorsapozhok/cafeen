@@ -111,13 +111,13 @@ class BayesSearch(BaseEstimator, TransformerMixin):
     def fit(self, x, y=None):
         def _evaluate(trial):
             estimator = lgb.LGBMClassifier(
-                n_jobs=self.n_jobs,
+#                n_jobs=self.n_jobs,
                 num_leaves=trial.suggest_int(
-                    'num_leaves', 10, 500),
+                    'num_leaves', 10, 1000),
                 learning_rate=trial.suggest_loguniform(
-                    'learning_rate', 0.01, 0.2),
+                    'learning_rate', 0.005, 0.3),
                 n_estimators=trial.suggest_int(
-                    'n_estimators', 50, 100),
+                    'n_estimators', 50, 500),
                 min_child_samples=trial.suggest_int(
                     'min_child_samples', 1, 30),
                 colsample_bytree=trial.suggest_discrete_uniform(

@@ -4,7 +4,10 @@ SHORT_DESCRIPTION = ''
 
 DEPENDENCIES = [
     'colorlog',
+    'eli5==0.10.1',
     'fire==0.2.1',
+    'lightgbm==2.3.1',
+    'optuna==1.0.0',
     'pandas==0.25.3',
     'scikit-learn==0.22.1',
     'tqdm'

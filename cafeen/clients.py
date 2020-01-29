@@ -105,7 +105,7 @@ def submit_2():
     submitter.fit(train[features], train['target']).predict(test, features)
 
 
-def submit_3():
+def submit_3(n_estimators=100):
     logger.info('reading train')
     train = pd.read_csv(config.path_to_train)
 
@@ -124,8 +124,17 @@ def submit_3():
 
     features = [col for col in train.columns if col not in ['id', 'target']]
 
+#    steps.BayesSearch(50, 1).fit(train[features], train['target'])
+
     estimator = steps.Classifier(
-        lgb.LGBMClassifier(n_estimators=100),
+        lgb.LGBMClassifier(
+            n_estimators=n_estimators,
+            num_leaves=44,
+            learning_rate=0.08,
+            min_child_samples=18,
+            colsample_bytree=0.7,
+            reg_alpha=0.2,
+            reg_lambda=0),
         n_splits=3)
 
     submitter = steps.Submitter(estimator, config.path_to_data)
@@ -174,6 +183,35 @@ def submit_4(n_estimators=100):
             colsample_bytree=0.5,
             reg_alpha=0.3,
             reg_lambda=0.6),
+        n_splits=3)
+
+    submitter = steps.Submitter(estimator, config.path_to_data)
+    submitter.fit(
+        train[features],
+        train['target']
+    ).predict(test, features)
+
+
+def submit_5(n_estimators=100):
+    logger.info('reading train')
+    train = pd.read_csv(config.path_to_train)
+
+    logger.info('reading test')
+    test = pd.read_csv(config.path_to_test)
+
+    features = ['bin_0', 'bin_1', 'bin_2', 'bin_3', 'bin_4',
+                'nom_0', 'nom_1', 'nom_2', 'nom_3', 'nom_4',
+                'ord_0', 'ord_1', 'ord_2', 'ord_3', 'ord_4',
+                'day', 'month']
+
+    estimator = lgb.LGBMClassifier(n_estimators=100)
+    train, test = utils.impute_nans(estimator, train, test, features)
+
+    features = [col for col in train.columns if col not in ['id', 'target']]
+    train, test = encode_data(train, test, features)
+
+    estimator = steps.Classifier(
+        lgb.LGBMClassifier(n_estimators=n_estimators),
         n_splits=3)
 
     submitter = steps.Submitter(estimator, config.path_to_data)
