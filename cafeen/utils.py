@@ -39,7 +39,11 @@ def read_data(nrows=None, test=True):
 
 
 def split_data(df):
-    return df[df['target'] > -1], df.loc[df['target'] == -1]
+    mask = (df['target'] > -1) & \
+           (~df['ord_3'].isnull()) & \
+           (~df['ord_2'].isnull()) & \
+           (~df['ord_5'].isnull())
+    return df.loc[mask], df.loc[df['target'] == -1]
 
 
 def encode_features(df, features=None, keep_na=False):
@@ -78,10 +82,16 @@ def encode_ordinal_features(df, features):
     return df
 
 
-def fill_na(df, features):
-    imputer = IterativeImputer(verbose=2, random_state=0, tol=1e-6)
+def fill_na(df, features, initial_strategy='mean'):
+    imputer = IterativeImputer(
+        initial_strategy=initial_strategy,
+        n_nearest_features=3,
+        verbose=2,
+        random_state=0,
+        tol=1e-4)
+
     df[features] = imputer.fit_transform(df[features])
-    df[features] = np.round(df[features].values)
+
     return df
 
 
@@ -90,6 +100,28 @@ def group_features(df, features, n_groups):
 #        df[feature + '_' + str(n_groups)] = \
 #            pd.qcut(df[feature], n_groups, labels=False)
         df[feature] = pd.qcut(df[feature], n_groups, labels=False)
+
+    return df
+
+
+def add_counts(df, features):
+    for feature in features:
+        counts = df.groupby(feature)['target'].count()
+        df[feature + '_count'] = df[feature].map(counts)
+
+    return df
+
+
+def mark_as_na(df, features, threshold=0):
+    for feature in features:
+        counts = df.groupby(feature)['target'].count()
+        categories = list(counts[counts < threshold].index)
+        n_nan = df[feature].isna().sum()
+
+        df.loc[df[feature].isin(categories), feature] = np.nan
+
+        logger.info(
+            f'{feature}: {df[feature].isna().sum() - n_nan} marked as NaN')
 
     return df
 

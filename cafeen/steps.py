@@ -51,14 +51,14 @@ class Classifier(BaseEstimator):
                 categorical_feature=categorical_feature,
                 feature_name=feature_name,
                 eval_set=[(valid_x, valid_y)],
-                eval_metric=self.roc_auc_score,
+                eval_metric='auc',
                 early_stopping_rounds=early_stopping_rounds,
                 verbose=verbose)
 
-            score += -self.estimators[fold].best_score_['valid_0']['roc_auc']
+            score += self.estimators[fold].best_score_['valid_0']['auc']
 
         logger.info('')
-        logger.debug(f'score: {score / self.n_splits:.3f}')
+        logger.debug(f'score: {score / self.n_splits:.4f}')
         logger.info('')
 
         return self
