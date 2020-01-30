@@ -1,221 +1,76 @@
 import logging
 
 import lightgbm as lgb
-import numpy as np
 import pandas as pd
-from sklearn.preprocessing import LabelEncoder
-from tqdm import tqdm
+from sklearn.impute import MissingIndicator
 
 from cafeen import config, steps, utils
 
 logger = logging.getLogger('cafeen')
 
 
-def encode_data(train, test, features=None):
-    if features is None:
-        features = test.columns
+def submit_0(n_estimators=100):
+    train, test = utils.split_data(
+        utils.encode_features(utils.read_data()))
 
-    obj_cols = [
-        col for col in features
-        if (col not in ['id']) and (test[col].dtype == np.object)]
-    num_cols = [
-        col for col in features
-        if (col not in ['id']) and (test[col].dtype == np.float64)]
-
-    logger.info('fill nans in numeric columns')
-    train[num_cols] = train[num_cols].fillna(value=-1)
-    test[num_cols] = test[num_cols].fillna(value=-1)
-
-    for col in tqdm(obj_cols, ascii=True, desc='encoding', ncols=70):
-        # fill nans replace nans by most frequent value
-        # works much faster than SimpleImputer
-        train[col] = train[col].fillna(value='NAN')
-        test[col] = test[col].fillna(value='NAN')
-
-        # encode values in column
-        encoder = LabelEncoder()
-        encoder.fit(pd.concat((train[col], test[col])))
-        train[col] = encoder.transform(train[col])
-        test[col] = encoder.transform(test[col])
-
-    return train, test
+    _submit(train, test, n_estimators)
 
 
-def submit_0():
-    logger.info('reading train')
-    train = pd.read_csv(config.path_to_train)
+def submit_1(n_estimators=100):
+    df = utils.read_data()
+    features = utils.get_features(df.columns)
 
-    logger.info('reading test')
-    test = pd.read_csv(config.path_to_test)
+    ind_features = MissingIndicator().fit_transform(df[features])
+    ind_columns = ['ind_' + str(i) for i in range(ind_features.shape[1])]
+    df[ind_columns] = pd.DataFrame(ind_features).astype('int')
 
-    train, test = encode_data(train, test)
+    df = utils.encode_ordinal_features(df, features)
+    df = utils.fill_na(df, features)
 
-    features = [col for col in test.columns if col not in ['target', 'id']]
+    train, test = utils.split_data(utils.encode_features(df))
 
-    estimator = steps.Classifier(
-        lgb.LGBMClassifier(n_estimators=100),
-        n_splits=4)
+#    steps.BayesSearch(50).fit(train[features], train['target'])
 
-    submitter = steps.Submitter(estimator, config.path_to_data)
-    submitter.fit(train[features], train['target']).predict(test, features)
-
-
-def submit_1():
-    logger.info('reading train')
-    train = pd.read_csv(config.path_to_train)
-
-    logger.info('reading test')
-    test = pd.read_csv(config.path_to_test)
-
-    train, test = encode_data(train, test)
-    train, test = utils.group_feature(train, test, 'nom_5', n_groups=20)
-    train, test = utils.group_feature(train, test, 'nom_9', n_groups=20)
-
-    features = [col for col in train.columns if col not in ['id', 'target']]
-
-    estimator = steps.Classifier(
-        lgb.LGBMClassifier(n_estimators=200),
-        n_splits=4)
-
-    submitter = steps.Submitter(estimator, config.path_to_data)
-    submitter.fit(train[features], train['target']).predict(test, features)
+    _submit(train, test, n_estimators)
 
 
-def submit_2():
-    logger.info('reading train')
-    train = pd.read_csv(config.path_to_train)
+def submit_2(n_estimators=100):
+    df = utils.read_data()
+    features = utils.get_features(df.columns)
 
-    logger.info('reading test')
-    test = pd.read_csv(config.path_to_test)
+    ind_features = MissingIndicator().fit_transform(df[features])
+    ind_columns = ['ind_' + str(i) for i in range(ind_features.shape[1])]
+    df[ind_columns] = pd.DataFrame(ind_features).astype('int')
 
-    train['ord3_x_ord2'] = train['ord_3'].map(str) + '_x_' + train['ord_2']
-    test['ord3_x_ord2'] = test['ord_3'].map(str) + '_x_' + test['ord_2']
+    df = utils.encode_ordinal_features(df, features)
 
-    train, test = encode_data(train, test)
-    train, test = utils.group_feature(train, test, 'nom_5', n_groups=20)
-    train, test = utils.group_feature(train, test, 'nom_9', n_groups=20)
+    grouped_features = ['nom_' + str(i) for i in range(5, 10)] + ['ord_5']
+    df = utils.group_features(df, grouped_features, 20)
+    df = utils.fill_na(df, features)
 
-    features = [col for col in train.columns if col not in ['id', 'target']]
+    train, test = utils.split_data(utils.encode_features(df))
 
-    estimator = steps.Classifier(
-        lgb.LGBMClassifier(n_estimators=100),
-        n_splits=4)
-
-    submitter = steps.Submitter(estimator, config.path_to_data)
-    submitter.fit(train[features], train['target']).predict(test, features)
+    _submit(train, test, n_estimators)
 
 
-def submit_3(n_estimators=100):
-    logger.info('reading train')
-    train = pd.read_csv(config.path_to_train)
-
-    logger.info('reading test')
-    test = pd.read_csv(config.path_to_test)
-
-    train['ord3_x_ord2'] = train['ord_3'].map(str) + '_x_' + train['ord_2']
-    test['ord3_x_ord2'] = test['ord_3'].map(str) + '_x_' + test['ord_2']
-    train.loc[train['month'] == 10, 'month'] = 11
-    test.loc[train['month'] == 10, 'month'] = 11
-
-    train, test = encode_data(train, test)
-    train, test = utils.group_feature(train, test, 'nom_5', n_groups=20)
-    train, test = utils.group_feature(train, test, 'nom_9', n_groups=20)
-    train, test = utils.group_feature(train, test, 'ord_5', n_groups=20)
-
-    features = [col for col in train.columns if col not in ['id', 'target']]
-
-#    steps.BayesSearch(50, 1).fit(train[features], train['target'])
-
+def _submit(train, test, n_estimators=100):
     estimator = steps.Classifier(
         lgb.LGBMClassifier(
             n_estimators=n_estimators,
-            num_leaves=44,
-            learning_rate=0.08,
-            min_child_samples=18,
-            colsample_bytree=0.7,
-            reg_alpha=0.2,
-            reg_lambda=0),
-        n_splits=3)
-
-    submitter = steps.Submitter(estimator, config.path_to_data)
-    submitter.fit(train[features], train['target']).predict(test, features)
-
-
-def submit_4(n_estimators=100):
-    logger.info('reading train')
-    train = pd.read_csv(config.path_to_train)
-
-    logger.info('reading test')
-    test = pd.read_csv(config.path_to_test)
-
-    features = ['bin_0', 'bin_1', 'bin_2', 'bin_3', 'bin_4',
-                'nom_0', 'nom_1', 'nom_2', 'nom_3', 'nom_4',
-                'ord_0', 'ord_1', 'ord_2', 'ord_3', 'ord_4',
-                'day', 'month']
-
-    for feature in features:
-        train, test = utils.add_woe_feature(train, test, feature)
-
-    features_woe = [feature + '_woe' for feature in features]
-    train = utils.add_woe_max(train, features_woe)
-    test = utils.add_woe_max(test, features_woe)
-
-    train, test = encode_data(train, test)
-    train, test = utils.group_feature(train, test, 'nom_5', n_groups=20)
-    train, test = utils.group_feature(train, test, 'nom_9', n_groups=20)
-    train, test = utils.group_feature(train, test, 'ord_5', n_groups=20)
-
-    for feature in ['nom_5_20', 'nom_9_20', 'ord_5_20']:
-        train, test = utils.add_woe_feature(train, test, feature)
-
-    features = [col for col in train.columns if 'woe' in col] + \
-               ['nom_5', 'nom_6', 'nom_7', 'nom_8', 'nom_9', 'ord_5']
-    cat_features = ['nom_5', 'nom_6', 'nom_7', 'nom_8', 'nom_9', 'ord_5']
-
-#    steps.BayesSearch(30, 1).fit(train[features], train['target'])
-
-    estimator = steps.Classifier(
-        lgb.LGBMClassifier(
-            n_estimators=n_estimators,
-            num_leaves=251,
-            learning_rate=0.05,
+            learning_rate=0.01,
+            num_leaves=63,
             min_child_samples=1,
             colsample_bytree=0.5,
-            reg_alpha=0.3,
-            reg_lambda=0.6),
-        n_splits=3)
+            reg_alpha=0.2,
+            reg_lambda=0.9),
+        n_splits=4)
+
+    features = utils.get_features(train.columns)
 
     submitter = steps.Submitter(estimator, config.path_to_data)
     submitter.fit(
         train[features],
-        train['target']
-    ).predict(test, features)
-
-
-def submit_5(n_estimators=100):
-    logger.info('reading train')
-    train = pd.read_csv(config.path_to_train)
-
-    logger.info('reading test')
-    test = pd.read_csv(config.path_to_test)
-
-    features = ['bin_0', 'bin_1', 'bin_2', 'bin_3', 'bin_4',
-                'nom_0', 'nom_1', 'nom_2', 'nom_3', 'nom_4',
-                'ord_0', 'ord_1', 'ord_2', 'ord_3', 'ord_4',
-                'day', 'month']
-
-    estimator = lgb.LGBMClassifier(n_estimators=100)
-    train, test = utils.impute_nans(estimator, train, test, features)
-
-    features = [col for col in train.columns if col not in ['id', 'target']]
-    train, test = encode_data(train, test, features)
-
-    estimator = steps.Classifier(
-        lgb.LGBMClassifier(n_estimators=n_estimators),
-        n_splits=3)
-
-    submitter = steps.Submitter(estimator, config.path_to_data)
-    submitter.fit(
-        train[features],
-        train['target']
+        train['target'],
+        categorical_feature='auto',
+        feature_name='auto'
     ).predict(test, features)

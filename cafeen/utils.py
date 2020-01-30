@@ -1,96 +1,97 @@
 from collections import defaultdict
+import logging
+import warnings
+
+warnings.simplefilter(action='ignore', category=FutureWarning)
 
 import eli5
 from eli5.sklearn import PermutationImportance
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
+from sklearn.experimental import enable_iterative_imputer
+from sklearn.impute import IterativeImputer
 from sklearn.metrics import roc_auc_score, make_scorer
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from tqdm import tqdm
 
+from cafeen import config
 
-def group_feature(train, test, feature, n_groups=10):
-    nobs = len(train) / n_groups
-    new_feature = feature + '_' + str(n_groups)
-
-    grouped = \
-        train.groupby(feature)['target'].agg(['mean', 'count']).sort_values(
-            by='mean', ascending=False)
-
-    grouped[new_feature] = np.floor(grouped['count'].cumsum() / nobs)
-    groups = grouped[new_feature].unique()
-    grouped.loc[grouped[new_feature] == groups[-1], new_feature] = groups[-2]
-    grouped.reset_index(level=feature, inplace=True)
-
-    train_columns = [
-        col for col in train.columns if col not in [new_feature]]
-    test_columns = [
-        col for col in test.columns if col not in [new_feature]]
-
-    train = train[train_columns].merge(
-        grouped[[feature, new_feature]], how='left', on=feature)
-    test = test[test_columns].merge(
-        grouped[[feature, new_feature]], how='left', on=feature)
-
-    train[new_feature] = train[new_feature].astype('int')
-    test[new_feature] = test[new_feature].astype('int')
-
-    return train, test
+logger = logging.getLogger('cafeen')
 
 
-def group_feature_train(train, feature, n_groups=10):
-    nobs = len(train) / n_groups
-    new_feature = feature + '_' + str(n_groups)
+def get_features(features):
+    return [feat for feat in features if feat not in ['id', 'target']]
 
-    grouped = \
-        train.groupby(feature)['target'].agg(['mean', 'count']).sort_values(
-            by='mean', ascending=False)
 
-    grouped[new_feature] = np.floor(grouped['count'].cumsum() / nobs)
-    groups = grouped[new_feature].unique()
-    grouped.loc[grouped[new_feature] == groups[-1], new_feature] = groups[-2]
-    grouped.reset_index(level=feature, inplace=True)
+def read_data(nrows=None, test=True):
+    logger.info('reading train')
+    train = pd.read_csv(config.path_to_train, nrows=nrows)
 
-    train_columns = [
-        col for col in train.columns if col not in [new_feature]]
+    if test:
+        logger.info('reading test')
+        test = pd.read_csv(config.path_to_test, nrows=nrows)
+        test['target'] = -1
 
-    train = train[train_columns].merge(
-        grouped[[feature, new_feature]], how='left', on=feature)
-
-    train[new_feature] = train[new_feature].astype('int')
-
+        return pd.concat([train, test])
     return train
 
 
-def add_woe_feature(train, test, feature, verbose=True):
-    n_events = train['target'].sum()
-    n_non_events = len(train) - n_events
-
-    bins = train.groupby(feature)['target'].agg(['sum', 'count'])
-    bins['n_non_events'] = bins['count'] - bins['sum']
-    bins['p_event'] = bins['sum'] / n_events
-    bins['p_non_event'] = bins['n_non_events'] / n_non_events
-    bins['woe'] = np.log(bins['p_event'] / bins['p_non_event'])
-
-    train[feature + '_woe'] = train[feature].map(bins['woe'].to_dict())
-    test[feature + '_woe'] = test[feature].map(bins['woe'].to_dict())
-
-    if verbose:
-        iv = ((bins['p_event'] - bins['p_non_event']) * bins['woe']).sum()
-        print(f'{feature}: IV {iv:.2f}')
-
-    return train, test
+def split_data(df):
+    return df[df['target'] > -1], df.loc[df['target'] == -1]
 
 
-def add_woe_max(train, features):
-    train['min_woe'] = train[features].min(axis=1)
-    train['max_woe'] = train[features].max(axis=1)
-    train['woe'] = train['max_woe']
-    mask = train['min_woe'].abs() > train['max_woe'].abs()
-    train.loc[mask, 'woe'] = train.loc[mask, 'min_woe']
-    return train
+def encode_features(df, features=None, keep_na=False):
+    if features is None:
+        features = get_features(df.columns)
+
+    obj_cols = [col for col in features if df[col].dtype == np.object]
+    num_cols = [col for col in features if df[col].dtype == np.float64]
+
+    if not keep_na:
+        logger.info('fill nans in numeric columns')
+        df[num_cols] = df[num_cols].fillna(value=-1)
+
+    for col in tqdm(obj_cols, ascii=True, desc='encoding', ncols=70):
+        df[col] = df[col].fillna(value='-1')
+
+        encoder = LabelEncoder()
+        df[col] = encoder.fit_transform(df[col])
+
+        if keep_na:
+            na_encoded = encoder.transform(['-1'])[0]
+            df[col] = df[col].replace(na_encoded, np.nan)
+
+    return df
+
+
+def encode_ordinal_features(df, features):
+    train = df[df['target'] > -1]
+
+    for feature in features:
+        encoded = train.groupby(feature)['target'].agg(
+            ['mean', 'count']).sort_values(by='mean')
+        encoded['count'] = range(1, len(encoded) + 1)
+        df[feature] = df[feature].map(encoded['count'])
+
+    return df
+
+
+def fill_na(df, features):
+    imputer = IterativeImputer(verbose=2, random_state=0, tol=1e-6)
+    df[features] = imputer.fit_transform(df[features])
+    df[features] = np.round(df[features].values)
+    return df
+
+
+def group_features(df, features, n_groups):
+    for feature in features:
+#        df[feature + '_' + str(n_groups)] = \
+#            pd.qcut(df[feature], n_groups, labels=False)
+        df[feature] = pd.qcut(df[feature], n_groups, labels=False)
+
+    return df
 
 
 def show_weights(expl):
@@ -128,50 +129,3 @@ def eval_weights(train, features):
     )
 
     show_weights(expl)
-
-
-def impute_nans(estimator, train, test, features):
-    _train = train.copy()
-    _test = test.copy()
-    _train['is_train'] = 1
-    _test['is_train'] = 0
-
-    df = pd.concat([
-        _train[features + ['is_train']],
-        _test[features + ['is_train']]]
-    ).reset_index(drop=True)
-
-    del _train, _test
-
-    nans = df.isna()
-
-    obj_cols = [col for col in features if df[col].dtype == np.object]
-    df[obj_cols] = df[obj_cols].fillna(value='-1')
-
-    num_cols = [col for col in features if df[col].dtype == np.float64]
-    df[num_cols] = df[num_cols].fillna(value=-1)
-
-    encoders = defaultdict()
-
-    for col in obj_cols:
-        encoders[col] = LabelEncoder()
-        encoders[col].fit(df[col])
-        df[col] = encoders[col].transform(df[col])
-
-    for feature in tqdm(features, ascii=True, ncols=70):
-        _features = [f for f in features if f not in [feature]]
-
-        imputed = estimator.fit(
-            df.loc[~nans[feature], _features],
-            df.loc[~nans[feature], feature]
-        ).predict(df[_features])
-
-        df.loc[nans[feature], feature] = imputed[nans.index[nans[feature]]]
-
-    for col in obj_cols:
-        df[col] = encoders[col].inverse_transform(df[col])
-
-    train[features] = df.loc[df['is_train'] == 1, features]
-    test[features] = df.loc[df['is_train'] == 0, features]
-
-    return train, test

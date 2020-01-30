@@ -3,6 +3,8 @@ import logging
 from os import path
 import warnings
 
+warnings.simplefilter(action='ignore', category=FutureWarning)
+
 import lightgbm as lgb
 import numpy as np
 import optuna
@@ -12,10 +14,9 @@ from sklearn.base import (
     TransformerMixin
 )
 from sklearn.metrics import roc_auc_score
-from sklearn.model_selection import KFold, train_test_split
+from sklearn.model_selection import StratifiedKFold, train_test_split
 
 optuna.logging.set_verbosity(optuna.logging.ERROR)
-warnings.simplefilter(action='ignore', category=FutureWarning)
 logger = logging.getLogger('cafeen')
 
 
@@ -30,7 +31,11 @@ class Classifier(BaseEstimator):
             early_stopping_rounds=50,
             verbose=20):
         score = 0
-        cv = KFold(n_splits=self.n_splits, random_state=42)
+
+        cv = StratifiedKFold(
+            n_splits=self.n_splits,
+            shuffle=True,
+            random_state=0)
 
         for fold, (train_index, valid_index) in enumerate(cv.split(x, y)):
             train_x, train_y = x[train_index], y[train_index]
@@ -104,9 +109,8 @@ class Submitter(BaseEstimator):
 
 
 class BayesSearch(BaseEstimator, TransformerMixin):
-    def __init__(self, n_trials=10, n_jobs=1):
+    def __init__(self, n_trials=10):
         self.n_trials = n_trials
-        self.n_jobs = n_jobs
 
     def fit(self, x, y=None):
         def _evaluate(trial):
@@ -114,12 +118,12 @@ class BayesSearch(BaseEstimator, TransformerMixin):
 #                n_jobs=self.n_jobs,
                 num_leaves=trial.suggest_int(
                     'num_leaves', 10, 1000),
-                learning_rate=trial.suggest_loguniform(
-                    'learning_rate', 0.005, 0.3),
-                n_estimators=trial.suggest_int(
-                    'n_estimators', 50, 500),
+#                learning_rate=trial.suggest_loguniform(
+#                    'learning_rate', 0.005, 0.3),
+#                n_estimators=trial.suggest_int(
+#                    'n_estimators', 50, 500),
                 min_child_samples=trial.suggest_int(
-                    'min_child_samples', 1, 30),
+                    'min_child_samples', 1, 50),
                 colsample_bytree=trial.suggest_discrete_uniform(
                     'colsample_bytree', 0.5, 0.9, 0.1),
                 reg_alpha=trial.suggest_discrete_uniform(
@@ -137,7 +141,7 @@ class BayesSearch(BaseEstimator, TransformerMixin):
             pass
 
         train_x, test_x, train_y, test_y = \
-            train_test_split(x, y, shuffle=False, train_size=0.8)
+            train_test_split(x, y, shuffle=True, train_size=0.8)
         study = optuna.create_study()
         study.optimize(_evaluate, n_trials=self.n_trials)
 
