@@ -1,9 +1,10 @@
-from collections import defaultdict
 import logging
+from random import randrange
 import warnings
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
+from category_encoders import TargetEncoder
 import eli5
 from eli5.sklearn import PermutationImportance
 import lightgbm as lgb
@@ -12,7 +13,7 @@ import pandas as pd
 from sklearn.experimental import enable_iterative_imputer
 from sklearn.impute import IterativeImputer
 from sklearn.metrics import roc_auc_score, make_scorer
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.preprocessing import LabelEncoder
 from tqdm import tqdm
 
@@ -39,10 +40,13 @@ def read_data(nrows=None, test=True):
 
 
 def split_data(df):
-    mask = (df['target'] > -1) & \
-           (~df['ord_3'].isnull()) & \
-           (~df['ord_2'].isnull()) & \
-           (~df['ord_5'].isnull())
+    mask = df['target'] > -1
+
+#    mask = (df['target'] > -1) & (df.isnull().sum(axis=1) < 4)
+#    mask = (df['target'] > -1) & \
+#           (~df['ord_3'].isnull()) & \
+#           (~df['ord_2'].isnull()) & \
+#           (~df['ord_5'].isnull())
     return df.loc[mask], df.loc[df['target'] == -1]
 
 
@@ -82,16 +86,71 @@ def encode_ordinal_features(df, features):
     return df
 
 
+def target_encoding(df, features, smoothing=0.2, handle_missing='value'):
+    train, test = split_data(df)
+    del df
+
+    train.sort_index(inplace=True)
+    train_id = train['id']
+    target = train['target']
+
+    encoded = []
+
+    for _iter in range(6):
+        _encoded = pd.DataFrame()
+        cv = StratifiedKFold(
+            n_splits=5,
+            shuffle=True,
+            random_state=randrange(100))
+        k_smooth = [0.1, 0.2, 0.3] * 2
+
+        for fold, (train_index, valid_index) in enumerate(
+                cv.split(train[features], train['target'])):
+            logger.info(f'target encoding on fold {fold}')
+
+            encoder = TargetEncoder(
+                cols=features,
+                smoothing=k_smooth[_iter],
+                handle_missing=handle_missing)
+
+            encoder.fit(train.iloc[train_index][features],
+                        train.iloc[train_index]['target'])
+
+            _encoded = _encoded.append(
+                encoder.transform(train.iloc[valid_index][features]),
+                ignore_index=False)
+
+        encoded += [_encoded.sort_index()]
+
+    encoder = TargetEncoder(
+        cols=features,
+        smoothing=smoothing,
+        handle_missing=handle_missing)
+
+    encoder.fit(train[features], train['target'])
+    test[features] = encoder.transform(test[features])
+
+    train = pd.concat(encoded).groupby(level=0).mean()
+    train['id'] = train_id.values
+    train['target'] = target.values
+#    train = encoded.sort_index()
+
+    df = pd.concat([train[test.columns], test])
+
+    return df
+
+
 def fill_na(df, features, initial_strategy='mean'):
+#    estimator = ExtraTreesRegressor(n_estimators=10, random_state=0)
+
     imputer = IterativeImputer(
+#        estimator=estimator,
         initial_strategy=initial_strategy,
-        n_nearest_features=3,
         verbose=2,
         random_state=0,
         tol=1e-4)
 
     df[features] = imputer.fit_transform(df[features])
-
     return df
 
 

@@ -5,6 +5,8 @@ import warnings
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
+import eli5
+from eli5.sklearn import PermutationImportance
 import lightgbm as lgb
 import numpy as np
 import optuna
@@ -13,7 +15,7 @@ from sklearn.base import (
     BaseEstimator,
     TransformerMixin
 )
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, make_scorer
 from sklearn.model_selection import StratifiedKFold, train_test_split
 
 optuna.logging.set_verbosity(optuna.logging.ERROR)
@@ -115,7 +117,10 @@ class BayesSearch(BaseEstimator, TransformerMixin):
     def fit(self, x, y=None):
         def _evaluate(trial):
             estimator = lgb.LGBMClassifier(
-#                n_jobs=self.n_jobs,
+                objective='binary',
+                metric='auc',
+                is_unbalance=True,
+                boost_from_average=False,
                 num_leaves=trial.suggest_int(
                     'num_leaves', 10, 1000),
 #                learning_rate=trial.suggest_loguniform(
@@ -125,7 +130,7 @@ class BayesSearch(BaseEstimator, TransformerMixin):
                 min_child_samples=trial.suggest_int(
                     'min_child_samples', 1, 50),
                 colsample_bytree=trial.suggest_discrete_uniform(
-                    'colsample_bytree', 0.5, 0.9, 0.1),
+                    'colsample_bytree', 0.1, 0.9, 0.1),
                 reg_alpha=trial.suggest_discrete_uniform(
                     'reg_alpha', 0, 1, 0.1),
                 reg_lambda=trial.suggest_discrete_uniform(
@@ -198,3 +203,60 @@ class BayesSearch(BaseEstimator, TransformerMixin):
     def _get_params(params):
         _params = dict(params)
         return _params
+
+
+class FeatureSelector(BaseEstimator, TransformerMixin):
+    def __init__(self, estimator, threshold=0.0002):
+        self.estimator = estimator
+        self.threshold = threshold
+        self.features = None
+
+    def get_features(self):
+        return self.features
+
+    def fit(self, x, y=None):
+        train_x, test_x, train_y, test_y = \
+            train_test_split(x, y, shuffle=True, train_size=0.7)
+
+        self.estimator.fit(train_x, train_y)
+
+        perm_estimator = PermutationImportance(
+            estimator=self.estimator,
+#            scoring=make_scorer(roc_auc_score, needs_proba=True),
+            n_iter=5).fit(test_x, test_y)
+
+        # calculate feature weights and return it as DataFrame
+        expl = eli5.format_as_dataframe(
+            eli5.explain_weights(
+                perm_estimator,
+                top=None,
+                feature_names=x.columns.to_list()))
+
+        # select features with weights above the threshold
+        selected = self.select_features(expl)
+        self.features = selected['feature'].to_list()
+
+        return self
+
+    def transform(self, x, y=None):
+        return x[self.features]
+
+    def select_features(self, expl, verbose=True):
+        expl = expl.sort_values(by='weight', ascending=False)
+
+        if verbose:
+            logger.info('')
+
+            for row in expl.itertuples():
+                msg = f'{row.weight:7.4f} +- {2*row.std:5.3f} {row.feature}'
+
+                if row.weight - row.std >= self.threshold:
+                    logger.debug(msg)
+                else:
+                    logger.info(msg)
+
+            logger.info('')
+
+        mask = expl['weight'] - expl['std'] >= self.threshold
+
+        return expl.loc[mask, ['feature', 'weight', 'std']]

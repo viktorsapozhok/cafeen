@@ -1,6 +1,5 @@
 import logging
 
-from category_encoders import TargetEncoder
 import lightgbm as lgb
 import pandas as pd
 from sklearn.impute import MissingIndicator
@@ -81,50 +80,30 @@ def submit_4(n_estimators=100):
 
 #    df = utils.mark_as_na(df, ['nom_5', 'nom_6', 'nom_9'], threshold=100)
 
-    train, test = utils.split_data(df)
-    del df
+    df = utils.target_encoding(
+        df, features, smoothing=0.2, handle_missing='return_nan')
 
-    train.sort_index(inplace=True)
-    train_id = train['id']
-    target = train['target']
-
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=0)
-    encoded = pd.DataFrame()
-
-    for train_index, valid_index in cv.split(train[features], train['target']):
-        encoder = TargetEncoder(
-            cols=features,
-            smoothing=0.2
-#            handle_missing='return_nan'
-        )
-
-        encoder.fit(train.iloc[train_index][features],
-                    train.iloc[train_index]['target'])
-
-        encoded = encoded.append(
-            encoder.transform(train.iloc[valid_index][features]),
-            ignore_index=False)
-
-    encoder = TargetEncoder(
-        cols=features,
-        smoothing=0.2
-#        handle_missing='return_nan'
-    )
-
-    encoder.fit(train[features], train['target'])
-    test[features] = encoder.transform(test[features])
-    train = encoded.sort_index()
-    train['id'] = train_id
-    train['target'] = target
-
-    df = pd.concat([train[test.columns], test])
-    del train, test
-
-#    df = utils.fill_na(df, features, initial_strategy='mean')
+    df = utils.fill_na(df, features, initial_strategy='mean')
 
     train, test = utils.split_data(df)
 
-    _submit(train, test, n_estimators)
+#    steps.BayesSearch(50).fit(train[features], train['target'])
+
+#    estimator = lgb.LGBMClassifier(
+#            objective='binary',
+#            metric='auc',
+#            is_unbalance=True,
+#            boost_from_average=False,
+#            n_estimators=200)
+
+#    selector = steps.FeatureSelector(estimator, threshold=0)
+#    selector.fit(train[features], train['target'])
+#    features = selector.get_features()
+
+    _submit(
+        train[features + ['target']],
+        test[features + ['target', 'id']],
+        n_estimators)
 
 
 def _submit(train, test, n_estimators=100):
@@ -132,14 +111,16 @@ def _submit(train, test, n_estimators=100):
         lgb.LGBMClassifier(
             objective='binary',
             metric='auc',
+            is_unbalance=True,
+            boost_from_average=False,
             n_estimators=n_estimators,
-            learning_rate=0.05,
-            num_leaves=63,
-            min_child_samples=1,
-            colsample_bytree=0.5,
-            reg_alpha=0.2,
-            reg_lambda=0.9),
-        n_splits=4)
+            learning_rate=0.005,
+            num_leaves=57,
+            min_child_samples=35,
+            colsample_bytree=0.3,
+            reg_alpha=0.8,
+            reg_lambda=1),
+        n_splits=6)
 
     features = utils.get_features(train.columns)
 

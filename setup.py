@@ -4,6 +4,7 @@ SHORT_DESCRIPTION = ''
 
 DEPENDENCIES = [
     'colorlog',
+    'category-encoders==2.1.0',
     'eli5==0.10.1',
     'fire==0.2.1',
     'lightgbm==2.3.1',
