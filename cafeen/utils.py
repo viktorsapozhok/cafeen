@@ -1,15 +1,16 @@
 import logging
-from random import randrange
+from random import choices, randrange
 import warnings
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
-from category_encoders import TargetEncoder
+from category_encoders import OneHotEncoder, TargetEncoder
 import eli5
 from eli5.sklearn import PermutationImportance
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
+from sklearn.compose import make_column_transformer
 from sklearn.experimental import enable_iterative_imputer
 from sklearn.impute import IterativeImputer
 from sklearn.metrics import roc_auc_score, make_scorer
@@ -41,6 +42,9 @@ def read_data(nrows=None, test=True):
 
 def split_data(df):
     mask = df['target'] > -1
+#    mask = (df['target'] > -1) & (df.isnull().sum(axis=1) <= 2)
+
+#    logger.info(f'removed {(df.isnull().sum(axis=1) > 2).sum()} rows from train')
 
 #    mask = (df['target'] > -1) & (df.isnull().sum(axis=1) < 4)
 #    mask = (df['target'] > -1) & \
@@ -74,44 +78,68 @@ def encode_features(df, features=None, keep_na=False):
     return df
 
 
-def encode_ordinal_features(df, features):
+def encode_ordinal_features(df, features, handle_missing='value'):
     train = df[df['target'] > -1]
 
     for feature in features:
-        encoded = train.groupby(feature)['target'].agg(
-            ['mean', 'count']).sort_values(by='mean')
-        encoded['count'] = range(1, len(encoded) + 1)
-        df[feature] = df[feature].map(encoded['count'])
+        if handle_missing == 'value':
+            if df[feature].dtype == np.object:
+                df[feature] = df[feature].fillna(value='-1')
+                train[feature] = train[feature].fillna(value='-1')
+            else:
+                df[feature] = df[feature].fillna(value=-1)
+                train[feature] = train[feature].fillna(value=-1)
+
+        mapping = train.groupby(feature)['target'].agg(['mean', 'count'])
+        mapping = mapping.sort_values(by='mean', ascending=True)
+        mapping['value'] = [i / (len(mapping) - 1) for i in range(len(mapping))]
+        df[feature] = df[feature].map(mapping['value'].to_dict())
 
     return df
 
 
-def target_encoding(df, features, smoothing=0.2, handle_missing='value'):
+def one_hot_encoding(df, features):
+    encoder = OneHotEncoder(cols=features, return_df=True, use_cat_names=True)
+    encoded = encoder.fit_transform(df[features])
+
+    df.drop(features, axis=1, inplace=True)
+    df = pd.concat([df, encoded], axis=1, sort=False)
+
+    return df
+
+
+def target_encoding(df, features,
+                    smoothing=0.2, handle_missing='value'):
     train, test = split_data(df)
     del df
 
     train.sort_index(inplace=True)
-    train_id = train['id']
-    target = train['target']
+#    train_id = train['id']
+#    target = train['target']
 
     encoded = []
 
-    for _iter in range(6):
+    if not isinstance(smoothing, list):
+        smoothing = [smoothing]
+
+    for _iter in range(len(smoothing)):
+        logger.debug(f'iteration {_iter + 1}')
+
         _encoded = pd.DataFrame()
         cv = StratifiedKFold(
             n_splits=5,
             shuffle=True,
             random_state=randrange(100))
-        k_smooth = [0.1, 0.2, 0.3] * 2
 
         for fold, (train_index, valid_index) in enumerate(
                 cv.split(train[features], train['target'])):
-            logger.info(f'target encoding on fold {fold}')
+            logger.info(f'target encoding on fold {fold + 1}')
 
             encoder = TargetEncoder(
                 cols=features,
-                smoothing=k_smooth[_iter],
-                handle_missing=handle_missing)
+                smoothing=smoothing[_iter],
+                handle_missing=handle_missing,
+                handle_unknown='value')
 
             encoder.fit(train.iloc[train_index][features],
                         train.iloc[train_index]['target'])
@@ -124,20 +152,36 @@ def target_encoding(df, features, smoothing=0.2, handle_missing='value'):
 
     encoder = TargetEncoder(
         cols=features,
-        smoothing=smoothing,
-        handle_missing=handle_missing)
+        smoothing=np.mean(smoothing),
+        handle_missing=handle_missing,
+        handle_unknown='value')
 
     encoder.fit(train[features], train['target'])
     test[features] = encoder.transform(test[features])
 
-    train = pd.concat(encoded).groupby(level=0).mean()
-    train['id'] = train_id.values
-    train['target'] = target.values
+    train[features] = pd.concat(encoded).groupby(level=0).mean()
+#    train['id'] = train_id.values
+#    train['target'] = target.values
 #    train = encoded.sort_index()
 
     df = pd.concat([train[test.columns], test])
 
     return df
+
+
+def encode_na(df, features):
+    encoded = dict()
+
+    train = df[df['target'] > -1]
+
+    for feature in features:
+        mask = train[feature].isna()
+        grouped = train[~mask].groupby(feature)['target'].agg(['mean', 'count'])
+        encoded[feature] = \
+            (grouped['mean'] * grouped['count']).sum() / \
+            grouped['count'].sum()
+
+    return encoded
 
 
 def fill_na(df, features, initial_strategy='mean'):
@@ -151,6 +195,18 @@ def fill_na(df, features, initial_strategy='mean'):
         tol=1e-4)
 
     df[features] = imputer.fit_transform(df[features])
+    return df
+
+
+def simulate_na(df, features):
+    for feature in features:
+        counts = df[df['target'] > -1].groupby(feature)['target'].count()
+        mask = df[feature].isna()
+        df.loc[mask, feature] = \
+            choices(counts.index.values, weights=counts.values, k=mask.sum())
+
+        logger.info(f'{feature}: imputed {mask.sum()} values')
+
     return df
 
 
