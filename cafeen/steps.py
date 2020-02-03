@@ -23,7 +23,7 @@ optuna.logging.set_verbosity(optuna.logging.ERROR)
 logger = logging.getLogger('cafeen')
 
 
-class Classifier(BaseEstimator):
+class LgbClassifier(BaseEstimator):
     def __init__(self, estimator, n_splits):
         self.estimators = [estimator] * n_splits
         self.n_splits = n_splits
@@ -87,60 +87,47 @@ class Classifier(BaseEstimator):
         return 'roc_auc', -roc_auc_score(y_true, y_score), False
 
 
-class LogReg(BaseEstimator):
-    def __init__(self, solver, C, class_weight, max_iter, tol, penalty):
-        self.solver = solver
-        self.C = C
-        self.class_weight = class_weight
-        self.max_iter = max_iter
-        self.tol = tol
-        self.penalty = penalty
-        self._estimator = LogisticRegression(
-            penalty=self.penalty,
-            solver=self.solver,
-            C=self.C,
-            class_weight=self.class_weight,
-            tol=self.tol,
-            max_iter=self.max_iter)
+class Classifier(BaseEstimator):
+    def __init__(self, estimator):
+        self._estimator = estimator
 
     def fit(self, x, y=None, **fit_params):
-        self._estimator.fit(x, y)
+        self._estimator.fit(x, y, **fit_params)
         return self
 
-    def cross_val(self, x, y, n_splits):
-        score = 0
+    def cross_val(self, x, y, n_splits, corr=False):
+        scores = []
 
-        cv = StratifiedKFold(
-            n_splits=n_splits,
-            shuffle=True,
-            random_state=0)
+        if n_splits > 1:
+            cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=0)
 
-        for fold, (train_index, valid_index) in enumerate(cv.split(x, y)):
-            train_x, train_y = x[train_index], y[train_index]
-            valid_x, valid_y = x[valid_index], y[valid_index]
+            for fold, (train_index, valid_index) in enumerate(cv.split(x, y)):
+                train_x, train_y = x[train_index], y[train_index]
+                valid_x, valid_y = x[valid_index], y[valid_index]
 
-            logger.info('')
-            logger.debug(f'started training on fold {fold}')
-            logger.info('')
+                if corr:
+                    corr_index = np.all(valid_x <= np.max(train_x, axis=0), axis=1)
+                    valid_x = valid_x[corr_index]
+                    valid_y = valid_y[corr_index]
 
-            estimator = LogisticRegression(
-                solver=self.solver,
-                max_iter=self.max_iter,
-                C=self.C,
-                tol=self.tol,
-                class_weight=self.class_weight,
-                random_state=0,
-                verbose=1)
+                logger.info('')
+                logger.debug(f'started training on fold {fold}')
+                logger.info('')
 
-            estimator.fit(train_x, train_y)
-            y_pred = estimator.predict_proba(valid_x)
-            _score = roc_auc_score(valid_y, y_pred[:, 1])
-            logger.info(f'score: {_score:.4f}')
+                estimator = self._estimator
+                estimator.fit(train_x, train_y)
 
-            score += _score
+                y_pred = estimator.predict_proba(valid_x)
+                score = roc_auc_score(valid_y, y_pred[:, 1])
+                scores += [score]
+
+                logger.info(f'score: {score:.4f}')
+        else:
+            y_pred = self._estimator.fit(x, y).predict_proba(x)
+            scores += [roc_auc_score(y, y_pred[:, 1])]
 
         logger.info('')
-        logger.debug(f'score: {score / n_splits:.4f}')
+        logger.debug(f'score: {np.mean(scores):.5f}')
         logger.info('')
 
     def predict_proba(self, x):

@@ -78,6 +78,33 @@ def encode_features(df, features=None, keep_na=False):
     return df
 
 
+def replace_na(df, features):
+    obj_cols = [col for col in features if df[col].dtype == np.object]
+    num_cols = [col for col in features if df[col].dtype == np.float64]
+
+    df[obj_cols] = df[obj_cols].fillna(value='-1')
+    df[num_cols] = df[num_cols].fillna(value=-1)
+
+    return df
+
+
+def apply_ordinal_encoder(df, features):
+    for feature in features:
+        test_vals = df.loc[df['target'] == -1, feature].unique()
+        train_vals = df.loc[df['target'] > -1, feature].unique()
+        unknown_vals = [v for v in test_vals if v not in train_vals]
+        df.loc[df[feature].isin(unknown_vals), feature] = np.nan
+
+    train_mask = df['target'] > -1
+    df = replace_na(df, features)
+
+    for feature in features:
+        encoder = LabelEncoder()
+        df[feature] = encoder.fit(df[feature]).transform(df[feature])
+
+    return df
+
+
 def encode_ordinal_features(df, features, handle_missing='value'):
     train = df[df['target'] > -1]
 
@@ -128,8 +155,8 @@ def target_encoding(df, features,
         _encoded = pd.DataFrame()
         cv = StratifiedKFold(
             n_splits=5,
-            shuffle=True,
-            random_state=randrange(100))
+            random_state=2020,
+            shuffle=True)
 
         for fold, (train_index, valid_index) in enumerate(
                 cv.split(train[features], train['target'])):

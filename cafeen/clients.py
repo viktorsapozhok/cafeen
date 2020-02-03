@@ -5,6 +5,7 @@ import pandas as pd
 from sklearn.impute import MissingIndicator
 from sklearn.model_selection import StratifiedKFold
 from sklearn.linear_model import LogisticRegression
+from sklearn.naive_bayes import CategoricalNB, GaussianNB, ComplementNB
 
 from cafeen import config, steps, utils
 
@@ -80,7 +81,7 @@ def submit_4(n_estimators=100, eta=0.1, nrows=None):
 
 #    df.drop(['bin_3'], axis=1, inplace=True)
 
-#    df = utils.mark_as_na(df, ['nom_5', 'nom_6', 'nom_9'], threshold=15)
+    df = utils.mark_as_na(df, ['nom_5', 'nom_6', 'nom_9'], threshold=250)
 
 #    df['n_nan'] = df.isnull().sum(axis=1)
 #    df['ord_5_1'] = df['ord_5'].str[0]
@@ -100,13 +101,13 @@ def submit_4(n_estimators=100, eta=0.1, nrows=None):
 #    ohe_features = []
     te_features = [f for f in features if (f not in oe_features) and (f not in ohe_features)]
 
-    df = utils.simulate_na(df, oe_features + te_features)
+#    df = utils.simulate_na(df, features)
+#    df = utils.apply_ordinal_encoder(df, features)
 
 #    na_encoded = utils.encode_na(df, te_features)
-    df = utils.encode_ordinal_features(df, oe_features, handle_missing='return_na')
-    df = utils.one_hot_encoding(df, ohe_features)
-
-    df = utils.target_encoding(df, te_features, smoothing=[0.2], handle_missing='return_na')
+#    df = utils.encode_ordinal_features(df, oe_features, handle_missing='value')
+#    df = utils.one_hot_encoding(df, oe_features + ohe_features)
+    df = utils.target_encoding(df, features, smoothing=[0.2, 0.2], handle_missing='value')
 
 #    for feature in te_features:
 #        df.loc[df[feature].isna(), feature] = na_encoded[feature]
@@ -141,6 +142,53 @@ def submit_4(n_estimators=100, eta=0.1, nrows=None):
         n_estimators, eta)
 
 
+def submit_5(n_estimators=100, eta=0.1, nrows=None):
+    train = pd.read_csv(config.path_to_train)
+    test = pd.read_csv(config.path_to_test)
+    train.sort_index(inplace=True)
+    train_y = train['target']
+    test_id = test['id']
+    train.drop(['target', 'id'], axis=1, inplace=True)
+    test.drop('id', axis=1, inplace=True)
+
+    from sklearn.metrics import roc_auc_score
+    cat_feat_to_encode = train.columns.tolist()
+    smoothing = 0.20
+
+    import category_encoders as ce
+    oof = pd.DataFrame([])
+
+    from sklearn.model_selection import StratifiedKFold
+
+    for tr_idx, oof_idx in StratifiedKFold(n_splits=5, random_state=2020, shuffle=True).split(train, train_y):
+        logger.info('target encoding')
+        ce_target_encoder = ce.TargetEncoder(cols=cat_feat_to_encode, smoothing=smoothing)
+        ce_target_encoder.fit(train.iloc[tr_idx, :], train_y.iloc[tr_idx])
+        oof = oof.append(ce_target_encoder.transform(train.iloc[oof_idx, :]), ignore_index=False)
+
+    ce_target_encoder = ce.TargetEncoder(cols=cat_feat_to_encode, smoothing=smoothing)
+    ce_target_encoder.fit(train, train_y)
+    train = oof.sort_index()
+    test = ce_target_encoder.transform(test)
+
+    from sklearn import linear_model
+
+    estimator = linear_model.LogisticRegression(random_state=1, solver='lbfgs', max_iter=2020, fit_intercept=True,
+                                          penalty='none', verbose=1)
+
+    clf = steps.Classifier(estimator)
+    clf.cross_val(train.values, train_y.values, n_splits=6)
+
+    test['id'] = test_id
+    features = utils.get_features(train)
+    submitter = steps.Submitter(clf, config.path_to_data)
+    submitter.fit(train, train_y).predict_proba(test, features)
+
+
+#    glm.fit(train, train_y)
+#    pd.DataFrame({'id': test_id, 'target': glm.predict_proba(test)[:, 1]}).to_csv('submission.csv', index=False)
+
+
 def _submit(train, test, n_estimators=100, eta=0.1):
 #    estimator = steps.Classifier(
 #        lgb.LGBMClassifier(
@@ -161,10 +209,29 @@ def _submit(train, test, n_estimators=100, eta=0.1):
 
     features = utils.get_features(train.columns)
 
-    estimator = steps.LogReg(solver='liblinear', C=1, class_weight='balanced', max_iter=1000, tol=1e-4, penalty='l2')
-    estimator.cross_val(train[features].values, train['target'].values, n_splits=6)
+#    estimator = LogisticRegression(
+#        solver='liblinear',
+#        C=1,
+#        class_weight='balanced',
+#        max_iter=1000,
+#        tol=1e-4,
+#        penalty='l2',
+#        verbose=1)
 
-#    submitter = steps.Submitter(estimator, config.path_to_data)
+    estimator = LogisticRegression(
+        random_state=1,
+        solver='lbfgs',
+        max_iter=2020,
+        fit_intercept=True,
+        penalty='none',
+        verbose=1)
+
+#    estimator = CategoricalNB(alpha=0.5)
+
+    clf = steps.Classifier(estimator)
+    clf.cross_val(train[features].values, train['target'].values, n_splits=6, corr=True)
+
+    submitter = steps.Submitter(clf, config.path_to_data)
 #    submitter.fit(train[features], train['target']).predict(test, features)
 
-#    submitter.fit(train[features], train['target']).predict_proba(test, features)
+    submitter.fit(train[features], train['target']).predict_proba(test, features)
