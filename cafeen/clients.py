@@ -1,8 +1,10 @@
 import logging
 
 import lightgbm as lgb
+import numpy as np
 import pandas as pd
 from sklearn.impute import MissingIndicator
+from sklearn.metrics import roc_auc_score, make_scorer
 from sklearn.model_selection import StratifiedKFold
 from sklearn.linear_model import LogisticRegression
 from sklearn.naive_bayes import CategoricalNB, GaussianNB, ComplementNB
@@ -77,11 +79,12 @@ def submit_3(n_estimators=100):
 
 
 def submit_4(n_estimators=100, eta=0.1, nrows=None):
-    df = utils.read_data(nrows=nrows)
+    df, valid = utils.read_data(nrows=nrows, valid=True)
 
 #    df.drop(['bin_3'], axis=1, inplace=True)
 
-    df = utils.mark_as_na(df, ['nom_5', 'nom_6', 'nom_9'], threshold=250)
+    df = utils.mark_as_na(df, ['nom_5', 'nom_6', 'nom_7', 'nom_8', 'nom_9'], threshold=17)
+    df.loc[df['month'] == 10, 'month'] = np.nan
 
 #    df['n_nan'] = df.isnull().sum(axis=1)
 #    df['ord_5_1'] = df['ord_5'].str[0]
@@ -92,7 +95,8 @@ def submit_4(n_estimators=100, eta=0.1, nrows=None):
 #    df['ord3_nom8'] = df['ord_3'].map(str) + '-' + df['nom_8'].map(str)
 
     features = utils.get_features(df.columns)
-    oe_features = [f for f in features if 'ord' in f]
+#    oe_features = [f for f in features if 'ord' in f]
+    oe_features = ['ord_0', 'ord_1', 'ord_2', 'ord_3', 'ord_4']
     ohe_features = [
         'bin_0', 'bin_1', 'bin_2', 'bin_3', 'bin_4',
         'nom_0', 'nom_1', 'nom_2', 'nom_3', 'nom_4',
@@ -102,12 +106,19 @@ def submit_4(n_estimators=100, eta=0.1, nrows=None):
     te_features = [f for f in features if (f not in oe_features) and (f not in ohe_features)]
 
 #    df = utils.simulate_na(df, features)
-#    df = utils.apply_ordinal_encoder(df, features)
+    df = utils.apply_ordinal_encoder(df, oe_features + ohe_features)
+    df = utils.target_encoding_alt(df, te_features)
+    df = utils.group_features(df, te_features, 12)
+#    df = utils.target_encoding_alt(df, features)
+
+    for feature in features:
+        logger.info(f'{feature}: {df[feature].nunique()}')
 
 #    na_encoded = utils.encode_na(df, te_features)
 #    df = utils.encode_ordinal_features(df, oe_features, handle_missing='value')
 #    df = utils.one_hot_encoding(df, oe_features + ohe_features)
-    df = utils.target_encoding(df, features, smoothing=[0.2, 0.2], handle_missing='value')
+#    df = utils.target_encoding_alt(df, oe_features + ohe_features)
+#    df = utils.target_encoding(df, te_features, smoothing=[0.2], handle_missing='value')
 
 #    for feature in te_features:
 #        df.loc[df[feature].isna(), feature] = na_encoded[feature]
@@ -139,6 +150,7 @@ def submit_4(n_estimators=100, eta=0.1, nrows=None):
     _submit(
         train[features + ['target']],
         test[features + ['target', 'id']],
+        valid,
         n_estimators, eta)
 
 
@@ -189,7 +201,7 @@ def submit_5(n_estimators=100, eta=0.1, nrows=None):
 #    pd.DataFrame({'id': test_id, 'target': glm.predict_proba(test)[:, 1]}).to_csv('submission.csv', index=False)
 
 
-def _submit(train, test, n_estimators=100, eta=0.1):
+def _submit(train, test, valid, n_estimators=100, eta=0.1):
 #    estimator = steps.Classifier(
 #        lgb.LGBMClassifier(
 #            objective='binary',
@@ -218,20 +230,23 @@ def _submit(train, test, n_estimators=100, eta=0.1):
 #        penalty='l2',
 #        verbose=1)
 
-    estimator = LogisticRegression(
-        random_state=1,
-        solver='lbfgs',
-        max_iter=2020,
-        fit_intercept=True,
-        penalty='none',
-        verbose=1)
+#    estimator = LogisticRegression(
+#        random_state=1,
+#        solver='lbfgs',
+#        max_iter=2020,
+#        fit_intercept=True,
+#        penalty='none',
+#        verbose=1)
 
-#    estimator = CategoricalNB(alpha=0.5)
+    estimator = CategoricalNB(alpha=0.8)
 
     clf = steps.Classifier(estimator)
-    clf.cross_val(train[features].values, train['target'].values, n_splits=6, corr=True)
+#    clf.cross_val(train[features].values, train['target'].values, n_splits=6, corr=False)
 
     submitter = steps.Submitter(clf, config.path_to_data)
 #    submitter.fit(train[features], train['target']).predict(test, features)
 
-    submitter.fit(train[features], train['target']).predict_proba(test, features)
+    y_pred = submitter.fit(train[features], train['target']).predict_proba(test, features)
+    valid = valid.merge(y_pred, how='left', on='id')
+
+    logger.debug(f'score: {roc_auc_score(valid["y_true"].values, valid["target"].values)}')

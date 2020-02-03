@@ -165,7 +165,9 @@ class Submitter(BaseEstimator):
             self.path_to_data,
             'results_' + now + '.csv')
 
-        self.results.to_csv(path_to_file, index=False)
+#        self.results.to_csv(path_to_file, index=False)
+
+        return self.results
 
 
 class BayesSearch(BaseEstimator, TransformerMixin):

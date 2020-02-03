@@ -1,5 +1,5 @@
 import logging
-from random import choices, randrange
+import random
 import warnings
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
@@ -27,17 +27,24 @@ def get_features(features):
     return [feat for feat in features if feat not in ['id', 'target']]
 
 
-def read_data(nrows=None, test=True):
+def read_data(nrows=None, valid=False):
     logger.info('reading train')
     train = pd.read_csv(config.path_to_train, nrows=nrows)
 
-    if test:
+    if valid:
+        random.seed(1)
+        index = random.sample(list(train.index), 50000)
+        test = train.loc[index, ['id', 'target']]
+        train.loc[index, 'target'] = -1
+        test.rename(columns={'target': 'y_true'}, inplace=True)
+
+        return train, test
+    else:
         logger.info('reading test')
         test = pd.read_csv(config.path_to_test, nrows=nrows)
         test['target'] = -1
 
         return pd.concat([train, test])
-    return train
 
 
 def split_data(df):
@@ -131,6 +138,17 @@ def one_hot_encoding(df, features):
 
     df.drop(features, axis=1, inplace=True)
     df = pd.concat([df, encoded], axis=1, sort=False)
+
+    return df
+
+
+def target_encoding_alt(df, features):
+    df = replace_na(df, features)
+    mask = df['target'] > -1
+
+    for feature in features:
+        target_mean = df[mask].groupby(feature)['target'].mean()
+        df[feature] = df[feature].map(target_mean.to_dict())
 
     return df
 
@@ -239,9 +257,7 @@ def simulate_na(df, features):
 
 def group_features(df, features, n_groups):
     for feature in features:
-#        df[feature + '_' + str(n_groups)] = \
-#            pd.qcut(df[feature], n_groups, labels=False)
-        df[feature] = pd.qcut(df[feature], n_groups, labels=False)
+        df[feature] = pd.qcut(df[feature], n_groups, labels=False, duplicates='drop')
 
     return df
 
