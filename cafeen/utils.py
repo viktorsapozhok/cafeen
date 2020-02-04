@@ -10,9 +10,6 @@ from eli5.sklearn import PermutationImportance
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
-from sklearn.compose import make_column_transformer
-from sklearn.experimental import enable_iterative_imputer
-from sklearn.impute import IterativeImputer
 from sklearn.metrics import roc_auc_score, make_scorer
 from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.preprocessing import LabelEncoder
@@ -27,13 +24,13 @@ def get_features(features):
     return [feat for feat in features if feat not in ['id', 'target']]
 
 
-def read_data(nrows=None, valid=False):
+def read_data(nrows=None, valid_rows=0):
     logger.info('reading train')
     train = pd.read_csv(config.path_to_train, nrows=nrows)
 
-    if valid:
+    if valid_rows > 0:
         random.seed(1)
-        index = random.sample(list(train.index), 50000)
+        index = random.sample(list(train.index), valid_rows)
         test = train.loc[index, ['id', 'target']]
         train.loc[index, 'target'] = -1
         test.rename(columns={'target': 'y_true'}, inplace=True)
@@ -44,20 +41,11 @@ def read_data(nrows=None, valid=False):
         test = pd.read_csv(config.path_to_test, nrows=nrows)
         test['target'] = -1
 
-        return pd.concat([train, test])
+        return pd.concat([train, test]), None
 
 
 def split_data(df):
     mask = df['target'] > -1
-#    mask = (df['target'] > -1) & (df.isnull().sum(axis=1) <= 2)
-
-#    logger.info(f'removed {(df.isnull().sum(axis=1) > 2).sum()} rows from train')
-
-#    mask = (df['target'] > -1) & (df.isnull().sum(axis=1) < 4)
-#    mask = (df['target'] > -1) & \
-#           (~df['ord_3'].isnull()) & \
-#           (~df['ord_2'].isnull()) & \
-#           (~df['ord_5'].isnull())
     return df.loc[mask], df.loc[df['target'] == -1]
 
 
@@ -95,14 +83,13 @@ def replace_na(df, features):
     return df
 
 
-def apply_ordinal_encoder(df, features):
+def label_encoding(df, features):
     for feature in features:
-        test_vals = df.loc[df['target'] == -1, feature].unique()
-        train_vals = df.loc[df['target'] > -1, feature].unique()
-        unknown_vals = [v for v in test_vals if v not in train_vals]
-        df.loc[df[feature].isin(unknown_vals), feature] = np.nan
+        test_values = df.loc[df['target'] == -1, feature].unique()
+        train_values = df.loc[df['target'] > -1, feature].unique()
+        unknown_values = [v for v in test_values if v not in train_values]
+        df.loc[df[feature].isin(unknown_values), feature] = np.nan
 
-    train_mask = df['target'] > -1
     df = replace_na(df, features)
 
     for feature in features:
@@ -142,19 +129,23 @@ def one_hot_encoding(df, features):
     return df
 
 
-def target_encoding_alt(df, features):
-    df = replace_na(df, features)
+def target_encoding(df, features, na_value=None):
     mask = df['target'] > -1
 
     for feature in features:
+        df.loc[df[feature].isna(), feature] = '-1'
         target_mean = df[mask].groupby(feature)['target'].mean()
+
+        if na_value is not None:
+            target_mean['-1'] = na_value
+
         df[feature] = df[feature].map(target_mean.to_dict())
 
     return df
 
 
-def target_encoding(df, features,
-                    smoothing=0.2, handle_missing='value'):
+def target_encoding_smooth(
+        df, features, smoothing=0.2, handle_missing='value'):
     train, test = split_data(df)
     del df
 
@@ -229,35 +220,17 @@ def encode_na(df, features):
     return encoded
 
 
-def fill_na(df, features, initial_strategy='mean'):
-#    estimator = ExtraTreesRegressor(n_estimators=10, random_state=0)
-
-    imputer = IterativeImputer(
-#        estimator=estimator,
-        initial_strategy=initial_strategy,
-        verbose=2,
-        random_state=0,
-        tol=1e-4)
-
-    df[features] = imputer.fit_transform(df[features])
-    return df
-
-
-def simulate_na(df, features):
+def group_features(df, features, n_groups, min_group_size=500):
     for feature in features:
-        counts = df[df['target'] > -1].groupby(feature)['target'].count()
-        mask = df[feature].isna()
-        df.loc[mask, feature] = \
-            choices(counts.index.values, weights=counts.values, k=mask.sum())
+        groups = df.groupby(feature)['target'].count()
+        group_index = list(groups[groups >= min_group_size].index)
 
-        logger.info(f'{feature}: imputed {mask.sum()} values')
+        grouped = ~df[feature].isin(group_index)
 
-    return df
+        df.loc[grouped, feature] = pd.qcut(df.loc[grouped, feature], n_groups, labels=False, duplicates='drop')
 
-
-def group_features(df, features, n_groups):
-    for feature in features:
-        df[feature] = pd.qcut(df[feature], n_groups, labels=False, duplicates='drop')
+        encoder = LabelEncoder()
+        df[feature] = encoder.fit(df[feature]).transform(df[feature])
 
     return df
 

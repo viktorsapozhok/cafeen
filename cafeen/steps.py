@@ -19,6 +19,8 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score, make_scorer
 from sklearn.model_selection import StratifiedKFold, train_test_split
 
+from cafeen import utils
+
 optuna.logging.set_verbosity(optuna.logging.ERROR)
 logger = logging.getLogger('cafeen')
 
@@ -135,7 +137,7 @@ class Classifier(BaseEstimator):
 
 
 class Submitter(BaseEstimator):
-    def __init__(self, estimator, path_to_data):
+    def __init__(self, estimator, path_to_data=None):
         self.estimator = estimator
         self.path_to_data = path_to_data
         self.results = pd.DataFrame()
@@ -144,28 +146,17 @@ class Submitter(BaseEstimator):
         self.estimator.fit(x.values, y.values, **fit_params)
         return self
 
-    def predict(self, x, features):
+    def predict_proba(self, x):
         self.results['id'] = x['id'].astype('int')
-        self.results['target'] = self.estimator.predict(x[features].values)
-
-        now = datetime.now().strftime('%Y_%m_%d_%H_%M')
-        path_to_file = path.join(
-            self.path_to_data,
-            'results_' + now + '.csv')
-
-        self.results.to_csv(path_to_file, index=False)
-
-    def predict_proba(self, x, features):
-        self.results['id'] = x['id'].astype('int')
+        features = utils.get_features(x)
         p = self.estimator.predict_proba(x[features].values)
         self.results['target'] = p[:, 1]
 
-        now = datetime.now().strftime('%Y_%m_%d_%H_%M')
-        path_to_file = path.join(
-            self.path_to_data,
-            'results_' + now + '.csv')
-
-#        self.results.to_csv(path_to_file, index=False)
+        if self.path_to_data is not None:
+            now = datetime.now().strftime('%Y_%m_%d_%H_%M')
+            file_name = 'results_' + now + '.csv'
+            path_to_file = path.join(self.path_to_data, file_name)
+            self.results.to_csv(path_to_file, index=False)
 
         return self.results
 

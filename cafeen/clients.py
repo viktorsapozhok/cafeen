@@ -3,88 +3,32 @@ import logging
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
-from sklearn.impute import MissingIndicator
-from sklearn.metrics import roc_auc_score, make_scorer
-from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import roc_auc_score
 from sklearn.linear_model import LogisticRegression
-from sklearn.naive_bayes import CategoricalNB, GaussianNB, ComplementNB
+from sklearn.naive_bayes import CategoricalNB
 
 from cafeen import config, steps, utils
 
 logger = logging.getLogger('cafeen')
 
 
-def submit_0(n_estimators=100):
-    train, test = utils.split_data(
-        utils.encode_features(utils.read_data()))
+def submit_1(**kwargs):
+    nrows = kwargs.get('nrows', None)
+    valid_rows = kwargs.get('valid_rows', 0)
 
-    _submit(train, test, n_estimators)
+    df, valid_y = utils.read_data(nrows=nrows, valid_rows=valid_rows)
+    na_value = df[df['target'] > -1]['target'].mean()
+    na_mask = df.isna()
 
-
-def submit_1(n_estimators=100):
-    df = utils.read_data()
-    features = utils.get_features(df.columns)
-
-    ind_features = MissingIndicator().fit_transform(df[features])
-    ind_columns = ['ind_' + str(i) for i in range(ind_features.shape[1])]
-    df[ind_columns] = pd.DataFrame(ind_features).astype('int')
-
-    df = utils.encode_ordinal_features(df, features)
-    df = utils.fill_na(df, features)
-
-    train, test = utils.split_data(utils.encode_features(df))
-
-#    steps.BayesSearch(50).fit(train[features], train['target'])
-
-    _submit(train, test, n_estimators)
-
-
-def submit_2(n_estimators=100):
-    df = utils.read_data()
-    features = utils.get_features(df.columns)
-
-    ind_features = MissingIndicator().fit_transform(df[features])
-    ind_columns = ['ind_' + str(i) for i in range(ind_features.shape[1])]
-    df[ind_columns] = pd.DataFrame(ind_features).astype('int')
-
-    df = utils.encode_ordinal_features(df, features)
-
-    grouped_features = ['nom_' + str(i) for i in range(5, 10)] + ['ord_5']
-    df = utils.group_features(df, grouped_features, 20)
-    df = utils.fill_na(df, features)
-
-    train, test = utils.split_data(df)
-
-    _submit(train, test, n_estimators)
-
-
-def submit_3(n_estimators=100):
-    df = utils.read_data()
-    features = utils.get_features(df.columns)
-
-    df = utils.mark_as_na(df, ['nom_5', 'nom_6', 'nom_9'], threshold=85)
-
-    ind_features = MissingIndicator().fit_transform(df[features])
-    ind_columns = ['ind_' + str(i) for i in range(ind_features.shape[1])]
-    df[ind_columns] = pd.DataFrame(ind_features).astype('int')
-
-    df = utils.encode_ordinal_features(df, features)
-    df = utils.fill_na(df, features, initial_strategy='most_frequent')
-    df = utils.add_counts(
-        df, ['nom_5', 'nom_6', 'nom_7', 'nom_8', 'nom_9', 'ord_5'])
-
-    train, test = utils.split_data(df)
-
-    _submit(train, test, n_estimators)
-
-
-def submit_4(n_estimators=100, eta=0.1, nrows=None):
-    df, valid = utils.read_data(nrows=nrows, valid=True)
+    logger.info(f'na_value: {na_value}')
 
 #    df.drop(['bin_3'], axis=1, inplace=True)
 
     df = utils.mark_as_na(df, ['nom_5', 'nom_6', 'nom_7', 'nom_8', 'nom_9'], threshold=17)
-    df.loc[df['month'] == 10, 'month'] = np.nan
+#    df.loc[df['month'] == 10, 'month'] = np.nan
+
+    df.loc[df['ord_4'] == 'J', 'ord_4'] = 'K'
+    df.loc[df['ord_4'] == 'L', 'ord_4'] = 'M'
 
 #    df['n_nan'] = df.isnull().sum(axis=1)
 #    df['ord_5_1'] = df['ord_5'].str[0]
@@ -96,7 +40,8 @@ def submit_4(n_estimators=100, eta=0.1, nrows=None):
 
     features = utils.get_features(df.columns)
 #    oe_features = [f for f in features if 'ord' in f]
-    oe_features = ['ord_0', 'ord_1', 'ord_2', 'ord_3', 'ord_4']
+    oe_features = [
+        'ord_0', 'ord_1', 'ord_2', 'ord_3', 'ord_4', 'ord_5']
     ohe_features = [
         'bin_0', 'bin_1', 'bin_2', 'bin_3', 'bin_4',
         'nom_0', 'nom_1', 'nom_2', 'nom_3', 'nom_4',
@@ -106,10 +51,17 @@ def submit_4(n_estimators=100, eta=0.1, nrows=None):
     te_features = [f for f in features if (f not in oe_features) and (f not in ohe_features)]
 
 #    df = utils.simulate_na(df, features)
-    df = utils.apply_ordinal_encoder(df, oe_features + ohe_features)
-    df = utils.target_encoding_alt(df, te_features)
-    df = utils.group_features(df, te_features, 12)
-#    df = utils.target_encoding_alt(df, features)
+#    df = utils.label_encoding(df, oe_features + ohe_features)
+    df = utils.target_encoding(df, oe_features + ohe_features, na_value=na_value)
+    df = utils.target_encoding(
+        utils.group_features(
+            utils.target_encoding(df, te_features),
+            te_features, n_groups=9, min_group_size=4100),
+        te_features)
+
+    for feature in features:
+        df.loc[na_mask[feature], feature] = na_value
+        df[feature] = np.log(df[feature])
 
     for feature in features:
         logger.info(f'{feature}: {df[feature].nunique()}')
@@ -123,14 +75,15 @@ def submit_4(n_estimators=100, eta=0.1, nrows=None):
 #    for feature in te_features:
 #        df.loc[df[feature].isna(), feature] = na_encoded[feature]
 
-    features = utils.get_features(df.columns)
-    logger.debug(f'{len(features)} features in dataset')
-
 #    df = utils.fill_na(df, features, initial_strategy='mean')
     assert df.isnull().sum().sum() == 0
 
     train, test = utils.split_data(df)
     del df
+
+    features = utils.get_features(train.columns)
+    logger.debug(f'{len(features)} features in dataset')
+    logger.debug(f'train: {train.shape}, test: {test.shape}')
 
 #    steps.BayesSearch(50).fit(train[features], train['target'])
 #    features = utils.get_features(train.columns)
@@ -150,11 +103,10 @@ def submit_4(n_estimators=100, eta=0.1, nrows=None):
     _submit(
         train[features + ['target']],
         test[features + ['target', 'id']],
-        valid,
-        n_estimators, eta)
+        valid_y=valid_y)
 
 
-def submit_5(n_estimators=100, eta=0.1, nrows=None):
+def submit_2(n_estimators=100, eta=0.1, nrows=None):
     train = pd.read_csv(config.path_to_train)
     test = pd.read_csv(config.path_to_test)
     train.sort_index(inplace=True)
@@ -201,7 +153,7 @@ def submit_5(n_estimators=100, eta=0.1, nrows=None):
 #    pd.DataFrame({'id': test_id, 'target': glm.predict_proba(test)[:, 1]}).to_csv('submission.csv', index=False)
 
 
-def _submit(train, test, valid, n_estimators=100, eta=0.1):
+def _submit(train, test, valid_y=None, **kwargs):
 #    estimator = steps.Classifier(
 #        lgb.LGBMClassifier(
 #            objective='binary',
@@ -226,27 +178,33 @@ def _submit(train, test, valid, n_estimators=100, eta=0.1):
 #        C=1,
 #        class_weight='balanced',
 #        max_iter=1000,
-#        tol=1e-4,
+#        tol=1e-5,
 #        penalty='l2',
 #        verbose=1)
 
-#    estimator = LogisticRegression(
-#        random_state=1,
-#        solver='lbfgs',
-#        max_iter=2020,
-#        fit_intercept=True,
-#        penalty='none',
-#        verbose=1)
+    estimator = LogisticRegression(
+        random_state=1,
+        solver='lbfgs',
+        max_iter=2020,
+        fit_intercept=True,
+        penalty='none',
+        verbose=1)
 
-    estimator = CategoricalNB(alpha=0.8)
+#    estimator = CategoricalNB(alpha=1)
 
     clf = steps.Classifier(estimator)
 #    clf.cross_val(train[features].values, train['target'].values, n_splits=6, corr=False)
+#    submitter = steps.Submitter(clf)
 
     submitter = steps.Submitter(clf, config.path_to_data)
 #    submitter.fit(train[features], train['target']).predict(test, features)
 
-    y_pred = submitter.fit(train[features], train['target']).predict_proba(test, features)
-    valid = valid.merge(y_pred, how='left', on='id')
+    y_pred = submitter.fit(
+        train[features], train['target']).predict_proba(test)
 
-    logger.debug(f'score: {roc_auc_score(valid["y_true"].values, valid["target"].values)}')
+    if valid_y is not None:
+        valid_y = valid_y.merge(y_pred, how='left', on='id')
+        score = roc_auc_score(valid_y['y_true'].values, valid_y['target'].values)
+        logger.info('')
+        logger.debug(f'score: {score}')
+        logger.info('')
