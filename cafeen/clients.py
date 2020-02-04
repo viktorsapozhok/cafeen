@@ -18,7 +18,7 @@ def submit_1(**kwargs):
 
     df, valid_y = utils.read_data(nrows=nrows, valid_rows=valid_rows)
     na_value = df[df['target'] > -1]['target'].mean()
-    na_mask = df.isna()
+    df_copy = df.copy()
 
     logger.info(f'na_value: {na_value}')
 
@@ -29,8 +29,15 @@ def submit_1(**kwargs):
 
     df.loc[df['ord_4'] == 'J', 'ord_4'] = 'K'
     df.loc[df['ord_4'] == 'L', 'ord_4'] = 'M'
+    df.loc[df['ord_4'] == 'S', 'ord_4'] = 'R'
+    df.loc[df['month'] == 10, 'month'] = 9
+    df['ord_5'] = df['ord_5'].str[0]
+    df.loc[df_copy['ord_5'].isna(), 'ord_5'] = np.nan
+    df.loc[df['ord_5'] == 'Z', 'ord_5'] = 'Y'
+    df.loc[df['ord_5'] == 'K', 'ord_5'] = 'L'
+    df.loc[df['ord_5'] == 'E', 'ord_5'] = 'D'
 
-#    df['n_nan'] = df.isnull().sum(axis=1)
+    #    df['n_nan'] = df.isnull().sum(axis=1)
 #    df['ord_5_1'] = df['ord_5'].str[0]
 #    df['ord_5_2'] = df['ord_5'].str[1]
 #    df['day_month'] = df['day'].map(str) + '-' + df['month'].map(str)
@@ -53,15 +60,14 @@ def submit_1(**kwargs):
 #    df = utils.simulate_na(df, features)
 #    df = utils.label_encoding(df, oe_features + ohe_features)
     df = utils.target_encoding(df, oe_features + ohe_features, na_value=na_value)
-    df = utils.target_encoding(
-        utils.group_features(
-            utils.target_encoding(df, te_features),
-            te_features, n_groups=9, min_group_size=4100),
-        te_features)
+    df = utils.target_encoding_cv(df, te_features, n_rounds=3, na_value=na_value)
 
     for feature in features:
-        df.loc[na_mask[feature], feature] = na_value
-        df[feature] = np.log(df[feature])
+        df.loc[df_copy[feature].isna(), feature] = na_value
+#        min_pos_value = df.loc[df[feature] > 0, feature].min()
+#        df.loc[df[feature] == 0, feature] = min_pos_value
+        logger.info(f'{feature}: {df[feature].min():.4f} - {df[feature].max():.4f}')
+        df[feature] = np.log(0.01 + df[feature])
 
     for feature in features:
         logger.info(f'{feature}: {df[feature].nunique()}')

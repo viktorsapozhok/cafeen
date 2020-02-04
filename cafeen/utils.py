@@ -15,7 +15,7 @@ from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.preprocessing import LabelEncoder
 from tqdm import tqdm
 
-from cafeen import config
+from cafeen import config, steps
 
 logger = logging.getLogger('cafeen')
 
@@ -47,30 +47,6 @@ def read_data(nrows=None, valid_rows=0):
 def split_data(df):
     mask = df['target'] > -1
     return df.loc[mask], df.loc[df['target'] == -1]
-
-
-def encode_features(df, features=None, keep_na=False):
-    if features is None:
-        features = get_features(df.columns)
-
-    obj_cols = [col for col in features if df[col].dtype == np.object]
-    num_cols = [col for col in features if df[col].dtype == np.float64]
-
-    if not keep_na:
-        logger.info('fill nans in numeric columns')
-        df[num_cols] = df[num_cols].fillna(value=-1)
-
-    for col in tqdm(obj_cols, ascii=True, desc='encoding', ncols=70):
-        df[col] = df[col].fillna(value='-1')
-
-        encoder = LabelEncoder()
-        df[col] = encoder.fit_transform(df[col])
-
-        if keep_na:
-            na_encoded = encoder.transform(['-1'])[0]
-            df[col] = df[col].replace(na_encoded, np.nan)
-
-    return df
 
 
 def replace_na(df, features):
@@ -144,21 +120,14 @@ def target_encoding(df, features, na_value=None):
     return df
 
 
-def target_encoding_smooth(
-        df, features, smoothing=0.2, handle_missing='value'):
+def target_encoding_cv(df, features, n_rounds=1, na_value=None):
     train, test = split_data(df)
     del df
 
     train.sort_index(inplace=True)
-#    train_id = train['id']
-#    target = train['target']
-
     encoded = []
 
-    if not isinstance(smoothing, list):
-        smoothing = [smoothing]
-
-    for _iter in range(len(smoothing)):
+    for _iter in range(n_rounds):
         logger.debug(f'iteration {_iter + 1}')
 
         _encoded = pd.DataFrame()
@@ -171,11 +140,7 @@ def target_encoding_smooth(
                 cv.split(train[features], train['target'])):
             logger.info(f'target encoding on fold {fold + 1}')
 
-            encoder = TargetEncoder(
-                cols=features,
-                smoothing=smoothing[_iter],
-                handle_missing=handle_missing,
-                handle_unknown='value')
+            encoder = steps.TargetEncoder(na_value=na_value)
 
             encoder.fit(train.iloc[train_index][features],
                         train.iloc[train_index]['target'])
@@ -186,19 +151,11 @@ def target_encoding_smooth(
 
         encoded += [_encoded.sort_index()]
 
-    encoder = TargetEncoder(
-        cols=features,
-        smoothing=np.mean(smoothing),
-        handle_missing=handle_missing,
-        handle_unknown='value')
-
+    encoder = steps.TargetEncoder(na_value=na_value)
     encoder.fit(train[features], train['target'])
     test[features] = encoder.transform(test[features])
 
     train[features] = pd.concat(encoded).groupby(level=0).mean()
-#    train['id'] = train_id.values
-#    train['target'] = target.values
-#    train = encoded.sort_index()
 
     df = pd.concat([train[test.columns], test])
 

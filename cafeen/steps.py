@@ -315,3 +315,38 @@ class FeatureSelector(BaseEstimator, TransformerMixin):
         mask = expl['weight'] >= self.threshold
 
         return expl.loc[mask, ['feature', 'weight', 'std']]
+
+
+class TargetEncoder(BaseEstimator, TransformerMixin):
+    def __init__(self, na_value=None):
+        self.na_value = na_value
+        self.target_mean = {}
+
+    def fit(self, x, y=None):
+        features = list(x.columns)
+        _x = x.copy()
+        _x['target'] = y
+        mask = _x['target'] > -1
+
+        for feature in features:
+            _x.loc[_x[feature].isna(), feature] = '-1'
+            target_mean = _x[mask].groupby(feature)['target'].mean()
+
+            if self.na_value is not None:
+                target_mean['-1'] = self.na_value
+
+            self.target_mean[feature] = target_mean
+
+        return self
+
+    def transform(self, x):
+        for feature in list(x.columns):
+            x.loc[x[feature].isna(), feature] = '-1'
+
+            values = x[feature].unique()
+            encoded_values = list(self.target_mean[feature].index)
+            unknown_values = [val for val in values if val not in encoded_values]
+            x.loc[x[feature].isin(unknown_values), feature] = '-1'
+
+            x[feature] = x[feature].map(self.target_mean[feature].to_dict())
+        return x
