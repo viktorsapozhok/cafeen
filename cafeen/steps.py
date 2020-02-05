@@ -75,7 +75,7 @@ class LgbClassifier(BaseEstimator):
 
         return self
 
-    def predict(self, x):
+    def predict_proba(self, x):
         predicted = np.zeros(len(x))
 
         for estimator in self.estimators:
@@ -150,7 +150,11 @@ class Submitter(BaseEstimator):
         self.results['id'] = x['id'].astype('int')
         features = utils.get_features(x)
         p = self.estimator.predict_proba(x[features].values)
-        self.results['target'] = p[:, 1]
+
+        if len(p.shape) == 2:
+            self.results['target'] = p[:, 1]
+        else:
+            self.results['target'] = p
 
         if self.path_to_data is not None:
             now = datetime.now().strftime('%Y_%m_%d_%H_%M')

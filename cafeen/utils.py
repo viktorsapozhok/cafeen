@@ -59,6 +59,22 @@ def replace_na(df, features):
     return df
 
 
+def count_encoding(df, features):
+    for feature in features:
+        test_values = df.loc[df['target'] == -1, feature].unique()
+        train_values = df.loc[df['target'] > -1, feature].unique()
+        unknown_values = [v for v in test_values if v not in train_values]
+        df.loc[df[feature].isin(unknown_values), feature] = np.nan
+
+    df = replace_na(df, features)
+
+    for feature in features:
+        counts = df.groupby(feature).size()
+        df[feature] = df[feature].map(counts.to_dict())
+
+    return df
+
+
 def label_encoding(df, features):
     for feature in features:
         test_values = df.loc[df['target'] == -1, feature].unique()
@@ -120,21 +136,23 @@ def target_encoding(df, features, na_value=None):
     return df
 
 
-def target_encoding_cv(df, features, n_rounds=1, na_value=None):
+def target_encoding_cv(df, features, cv=None, n_rounds=1, na_value=None):
     train, test = split_data(df)
     del df
 
     train.sort_index(inplace=True)
     encoded = []
 
-    for _iter in range(n_rounds):
-        logger.debug(f'iteration {_iter + 1}')
-
-        _encoded = pd.DataFrame()
+    if cv is None:
         cv = StratifiedKFold(
             n_splits=5,
             random_state=2020,
             shuffle=True)
+
+    for _iter in range(n_rounds):
+        logger.debug(f'iteration {_iter + 1}')
+
+        _encoded = pd.DataFrame()
 
         for fold, (train_index, valid_index) in enumerate(
                 cv.split(train[features], train['target'])):
@@ -153,11 +171,14 @@ def target_encoding_cv(df, features, n_rounds=1, na_value=None):
 
     encoder = steps.TargetEncoder(na_value=na_value)
     encoder.fit(train[features], train['target'])
-    test[features] = encoder.transform(test[features])
 
-    train[features] = pd.concat(encoded).groupby(level=0).mean()
+    _test = test.copy()
+    _test[features] = encoder.transform(test[features].copy())
 
-    df = pd.concat([train[test.columns], test])
+    _train = train.copy()
+    _train[features] = pd.concat(encoded).groupby(level=0).mean()
+
+    df = pd.concat([_train[test.columns], _test])
 
     return df
 
@@ -200,16 +221,30 @@ def add_counts(df, features):
     return df
 
 
-def mark_as_na(df, features, threshold=0):
+def mark_as_na(df, features, threshold=None, alpha=None):
     for feature in features:
-        counts = df.groupby(feature)['target'].count()
-        categories = list(counts[counts < threshold].index)
-        n_nan = df[feature].isna().sum()
+        if threshold is not None:
+            counts = df.groupby(feature)['target'].count()
+            categories = list(counts[counts < threshold].index)
+            n_nan = df[feature].isna().sum()
 
-        df.loc[df[feature].isin(categories), feature] = np.nan
+            df.loc[df[feature].isin(categories), feature] = np.nan
 
-        logger.info(
-            f'{feature}: {df[feature].isna().sum() - n_nan} marked as NaN')
+            logger.info(
+                f'{feature}: {df[feature].isna().sum() - n_nan} marked as NaN')
+
+        if alpha is not None:
+            _encoded = df[[feature, 'target']].copy()
+            _encoded = target_encoding_cv(_encoded, [feature], n_rounds=1)
+            avg = _encoded[feature].mean()
+            std = _encoded[feature].std()
+
+            mask = (_encoded[feature] - avg).abs() > alpha * std
+
+            df.loc[mask, feature] = np.nan
+
+            logger.info(
+                f'{feature}: {mask.sum()} marked as NaN')
 
     return df
 
