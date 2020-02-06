@@ -25,6 +25,156 @@ optuna.logging.set_verbosity(optuna.logging.ERROR)
 logger = logging.getLogger('cafeen')
 
 
+class Encoder(BaseEstimator, TransformerMixin):
+    def __init__(
+            self,
+            cardinal_encoding=None,
+            handle_missing=True,
+            min_category_size=17,
+            log_alpha=0.1,
+            one_hot_encoding=True,
+            correct_features=None
+    ):
+        self.cardinal_encoding = cardinal_encoding
+        self.handle_missing = handle_missing
+        self.min_category_size = min_category_size
+        self.correct_features = correct_features
+        self.log_alpha = log_alpha
+        self.one_hot_encoding = one_hot_encoding
+
+        self.nominal_features = None
+        self.ordinal_features = None
+        self.cardinal_features = None
+
+    def fit(self, x, y=None):
+        features = self.get_features(x.columns)
+
+        self.nominal_features = [
+            'bin_0', 'bin_1', 'bin_2', 'bin_3', 'bin_4',
+            'nom_0', 'nom_1', 'nom_2', 'nom_3', 'nom_4',
+            'day', 'month'
+        ]
+        self.ordinal_features = [
+            'ord_0', 'ord_1', 'ord_2', 'ord_3', 'ord_4', 'ord_5'
+        ]
+        self.cardinal_features = [
+            feature for feature in features
+            if feature not in self.nominal_features + self.ordinal_features]
+
+        return self
+
+    def transform(self, x):
+        _x = x.copy()
+
+        features = self.get_features(_x.columns)
+
+        if self.min_category_size > 0:
+            _x = utils.mark_as_na(
+                _x, self.cardinal_features, threshold=self.min_category_size)
+
+        _x['ord_5'] = x['ord_5'].str[0]
+        _x.loc[x['ord_5'].isna(), 'ord_5'] = np.nan
+
+        if self.correct_features['ord_4']:
+            _x = self.correct_ord_4(_x)
+        if self.correct_features['ord_5']:
+            _x = self.correct_ord_5(_x)
+        if self.correct_features['day']:
+            _x = self.correct_day(_x)
+
+        _x = utils.target_encoding(
+            _x, self.nominal_features + self.ordinal_features)
+
+        for feature in self.cardinal_features:
+            cv = self.cardinal_encoding[feature]['cv']
+            n_groups = self.cardinal_encoding[feature]['n_groups']
+            min_group_size = self.cardinal_encoding[feature]['min_group_size']
+
+            _x = utils.target_encoding_cv(_x, [feature], cv=cv)
+
+            if n_groups > 0:
+                _x = utils.group_features(
+                    _x, [feature],
+                    n_groups=n_groups,
+                    min_group_size=min_group_size)
+                _x = utils.target_encoding(_x, [feature])
+
+        na_value = self.get_na_value(x)
+
+        for feature in features:
+            if self.handle_missing:
+                _x.loc[x[feature].isna(), feature] = na_value
+
+            _x.loc[_x[feature].isna(), feature] = na_value
+
+        logger.info('')
+
+        for feature in features:
+            logger.info(
+                f'{feature}: {_x[feature].min():.4f} - {_x[feature].max():.4f}')
+
+            if self.log_alpha > 0:
+                _x[feature] = np.log(self.log_alpha + _x[feature])
+
+        one_hot_features = []
+
+        logger.info('')
+        logger.info('amount of unique values')
+
+        for feature in features:
+            n_unique = _x[feature].nunique()
+
+            if n_unique < 120:
+                one_hot_features += [feature]
+
+            logger.info(f'{feature}: {n_unique}')
+
+        logger.info('')
+
+        if self.one_hot_encoding:
+            _x = utils.one_hot_encoding(_x, one_hot_features)
+
+        logger.info(f'data size: {_x.shape}')
+        logger.info('')
+
+        assert _x.isnull().sum().sum() == 0
+
+        return _x
+
+    @staticmethod
+    def get_na_value(x):
+        return x[x['target'] > -1]['target'].mean()
+
+    @staticmethod
+    def correct_day(x):
+        x.loc[(x['month'] == 2) & (x['day'] == 2), 'day'] = 6
+        x.loc[(x['month'] == 4) & (x['day'] == 6), 'day'] = 7
+        x.loc[(x['month'] == 5) & (x['day'] == 7), 'day'] = 1
+        x.loc[(x['month'] == 10) & (x['day'] == 2), 'day'] = 1
+        x.loc[(x['month'] == 10) & (x['day'] == 6), 'day'] = 1
+        x.loc[(x['month'] == 10) & (x['day'] == 7), 'day'] = 1
+        return x
+
+    @staticmethod
+    def correct_ord_4(x):
+        x.loc[x['ord_4'] == 'J', 'ord_4'] = 'K'
+        x.loc[x['ord_4'] == 'L', 'ord_4'] = 'M'
+        x.loc[x['ord_4'] == 'S', 'ord_4'] = 'R'
+        return x
+
+    @staticmethod
+    def correct_ord_5(x):
+        x.loc[x['ord_5'] == 'Z', 'ord_5'] = 'Y'
+        x.loc[x['ord_5'] == 'K', 'ord_5'] = 'L'
+        x.loc[x['ord_5'] == 'E', 'ord_5'] = 'D'
+        return x
+
+    @staticmethod
+    def get_features(features):
+        return [feature for feature in features
+                if feature not in ['id', 'target']]
+
+
 class OneColClassifier(BaseEstimator):
     def __init__(self, estimator, n_splits=1):
         self.estimators = [estimator] * n_splits
@@ -270,32 +420,83 @@ class BayesSearch(BaseEstimator, TransformerMixin):
     def __init__(self, n_trials=10):
         self.n_trials = n_trials
 
-    def fit(self, x, y=None):
+    def fit(self, x, y=None, valid=None):
         def _evaluate(trial):
-#            estimator = lgb.LGBMClassifier(
-#                objective='binary',
-#                metric='auc',
-#                is_unbalance=True,
-#                boost_from_average=False,
-#                num_leaves=trial.suggest_int(
-#                    'num_leaves', 10, 1000),
-#                min_child_samples=trial.suggest_int(
-#                    'min_child_samples', 1, 50),
-#                colsample_bytree=trial.suggest_discrete_uniform(
-#                    'colsample_bytree', 0.1, 0.9, 0.1),
-#                reg_alpha=trial.suggest_discrete_uniform(
-#                    'reg_alpha', 0, 1, 0.1),
-#                reg_lambda=trial.suggest_discrete_uniform(
-#                    'reg_lambda', 0, 1, 0.1))
+            n_groups = [0, 5, 10, 15, 17, 19, 20, 21, 22, 23, 25, 30]
+            group_size = [500, 1000, 2000, 5000]
+            n_splits = [2, 3, 4, 5, 6, 7, 8]
+
+            cardinal_encoding = {
+                'nom_5': {
+#                    'cv': KFold(n_splits=trial.suggest_categorical('cv_5', n_splits)),
+                    'cv': KFold(n_splits=5),
+                    'n_groups': trial.suggest_categorical('groups_5', n_groups),
+                    'min_group_size': 5000
+                },
+                'nom_6': {
+                    'cv': KFold(n_splits=5),
+                    'n_groups': trial.suggest_categorical('groups_6', n_groups),
+                    'min_group_size': 5000
+                },
+                'nom_7': {
+                    'cv': KFold(n_splits=5),
+                    'n_groups': trial.suggest_categorical('groups_7', n_groups),
+                    'min_group_size': 5000
+                },
+                'nom_8': {
+                    'cv': KFold(n_splits=5),
+                    'n_groups': trial.suggest_categorical('groups_8', n_groups),
+                    'min_group_size': 5000
+                },
+                'nom_9': {
+                    'cv': KFold(n_splits=5),
+                    'n_groups': trial.suggest_categorical('groups_9', n_groups),
+                    'min_group_size': 5000
+                }
+            }
+
+            min_category_size = [2, 5, 10, 15, 20, 25, 30, 50]
+            correct_features = {
+#                'ord_4': trial.suggest_categorical('corr_ord_4', [True, False]),
+                'ord_4': True,
+                'ord_5': True,
+                'day': True
+            }
+
+            encoder = Encoder(
+                cardinal_encoding=cardinal_encoding,
+                handle_missing=True,
+                min_category_size=trial.suggest_categorical('min_category_size', min_category_size),
+                log_alpha=trial.suggest_discrete_uniform('log_alpha', 0, 0.5, 0.1),
+#                one_hot_encoding=trial.suggest_categorical('one_hot', [True, False]),
+                one_hot_encoding=False,
+                correct_features=correct_features
+            )
 
             estimator = LogisticRegression(
                 solver='liblinear',
-                random_state=0,
+                random_state=1,
+                max_iter=2000,
+                penalty='l2',
+                verbose=1,
                 C=trial.suggest_discrete_uniform('C', 0.05, 1, 0.05),
                 class_weight=trial.suggest_categorical('class_weight', ['balanced', None]))
 
-            y_score = estimator.fit(train_x, train_y).predict_proba(test_x)
-            score = -roc_auc_score(test_y, y_score[:, 1])
+            encoded = encoder.fit_transform(x)
+            _train, _test = utils.split_data(encoded)
+            del encoded
+
+            features = encoder.get_features(_train.columns)
+
+            predicted = pd.DataFrame()
+            predicted['id'] = _test['id']
+            predicted['y_pred'] = estimator.fit(_train[features], _train['target']).predict_proba(_test[features])[:, 1]
+            del _train, _test
+
+            _valid = valid.merge(predicted, how='left', on='id')
+            score = -roc_auc_score(_valid['y_true'].values, _valid['y_pred'].values)
+            del _valid, predicted
+
             self._print_trial(trial, score)
 
             return score
@@ -303,8 +504,7 @@ class BayesSearch(BaseEstimator, TransformerMixin):
         def _pack_best_trial(trial):
             pass
 
-        train_x, test_x, train_y, test_y = \
-            train_test_split(x, y, shuffle=True, train_size=0.7, random_state=0)
+#        train_x = x.copy
         study = optuna.create_study()
         study.optimize(_evaluate, n_trials=self.n_trials)
 
@@ -332,10 +532,14 @@ class BayesSearch(BaseEstimator, TransformerMixin):
             if score < trial.study_best_value:
                 is_best = True
 
+        logger.info('')
+
         if is_best:
             logger.debug(info)
         else:
             logger.info(info)
+
+        logger.info('')
 
     @staticmethod
     def _create_trial(estimator, number, best_value):
@@ -349,14 +553,16 @@ class BayesSearch(BaseEstimator, TransformerMixin):
         info = ''
         for key in params:
             if params[key] is None:
-                info += f'{key}: {params[key]}, '
+                info += f'{key}: None, '
             else:
                 if isinstance(params[key], int):
-                    info += f'{key}: {params[key]:4.0f}, '
-                if isinstance(params[key], str):
+                    info += f'{key}: {params[key]:.0f}, '
+                elif isinstance(params[key], str):
                     info += f'{key}: {params[key]}, '
+                elif isinstance(params[key], bool):
+                    info += f'{key}: {str(params[key])}, '
                 else:
-                    info += f'{key}: {params[key]:4.3f}, '
+                    info += f'{key}: {params[key]:.3f}, '
         return info
 
     @staticmethod

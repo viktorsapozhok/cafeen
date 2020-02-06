@@ -18,12 +18,12 @@ def submit_1(**kwargs):
     df, valid_y = utils.read_data(
         nrows=kwargs.get('nrows', None),
         valid_rows=kwargs.get('valid_rows', 0))
+    df = utils.mark_as_na(df, ['nom_5', 'nom_6', 'nom_7', 'nom_8', 'nom_9'], threshold=17)
+
     na_value = df[df['target'] > -1]['target'].mean()
     df_copy = df.copy()
 
     logger.info(f'na_value: {na_value}')
-
-    df = utils.mark_as_na(df, ['nom_5', 'nom_6', 'nom_7', 'nom_8', 'nom_9'], threshold=17)
 
     df.loc[df['ord_4'] == 'J', 'ord_4'] = 'K'
     df.loc[df['ord_4'] == 'L', 'ord_4'] = 'M'
@@ -60,24 +60,41 @@ def submit_1(**kwargs):
 #    df = utils.target_encoding_cv(df, te_features, cv=KFold(n_splits=5), n_rounds=1, na_value=na_value)
 
     df = utils.target_encoding_cv(df, te_features, cv=KFold(n_splits=5))
-    df = utils.group_features(df, te_features, n_groups=20, min_group_size=5000)
-    df = utils.target_encoding(df, te_features)
+#    df = utils.group_features(df, te_features, n_groups=20, min_group_size=5000)
+    df = utils.group_features(df, ['nom_5', 'nom_6'], n_groups=15, min_group_size=5000)
+    df = utils.group_features(df, ['nom_7'], n_groups=20, min_group_size=5000)
+    df = utils.group_features(df, ['nom_9'], n_groups=30, min_group_size=5000)
+    df = utils.target_encoding(df, ['nom_5', 'nom_6', 'nom_7', 'nom_9'])
 
     logger.info('')
 
     for feature in features:
         if na_value is not None:
             df.loc[df_copy[feature].isna(), feature] = na_value
+
+        df.loc[df[feature].isna(), feature] = na_value
+
         logger.info(f'{feature}: {df[feature].min():.4f} - {df[feature].max():.4f}')
+        
         df[feature] = np.log(0.1 + df[feature])
     logger.info('')
+
+    del df_copy
 
     logger.info('amount of unique values')
     for feature in features:
         logger.info(f'{feature}: {df[feature].nunique()}')
     logger.info('')
 
-#    df = utils.one_hot_encoding(df, features)
+    one_hot_features = []
+
+    for feature in features:
+        n_unique = df[feature].nunique()
+
+        if n_unique < 120:
+            one_hot_features += [feature]
+
+    df = utils.one_hot_encoding(df, one_hot_features)
 
     assert df.isnull().sum().sum() == 0
 
@@ -215,28 +232,37 @@ def submit_3(**kwargs):
         valid_y=valid_y)
 
 
+def submit_4(**kwargs):
+    train, valid = utils.read_data(
+        nrows=kwargs.get('nrows', None),
+        valid_rows=kwargs.get('valid_rows', 0))
+
+    bs = steps.BayesSearch(n_trials=100)
+    bs.fit(train, valid=valid)
+
+
 def _submit(train, test, valid_y=None, **kwargs):
-    estimator = steps.OneColClassifier(
-        estimator=lgb.LGBMClassifier(
-            objective='binary',
-            metric='auc',
-            is_unbalance=True,
-            boost_from_average=False,
-            n_estimators=kwargs.get('n_estimators', 100),
-            learning_rate=kwargs.get('eta', 0.1),
-            num_leaves=57,
-            min_child_samples=35,
-            colsample_bytree=0.3,
-            reg_alpha=0.8,
-            reg_lambda=1),
-        n_splits=1)
+#    estimator = steps.OneColClassifier(
+#        estimator=lgb.LGBMClassifier(
+#            objective='binary',
+#            metric='auc',
+#            is_unbalance=True,
+#            boost_from_average=False,
+#            n_estimators=kwargs.get('n_estimators', 100),
+#            learning_rate=kwargs.get('eta', 0.1),
+#            num_leaves=57,
+#            min_child_samples=35,
+#            colsample_bytree=0.3,
+#            reg_alpha=0.8,
+#            reg_lambda=1),
+#        n_splits=1)
 
 #    estimator = LogisticRegression(solver='liblinear', C=0.095, verbose=1)
 
     features = utils.get_features(train.columns)
 
-    estimator.fit(train[features], train['target'])
-    y_pred = estimator.predict_proba(test[features + ['id']])
+#    estimator.fit(train[features], train['target'])
+#    y_pred = estimator.predict_proba(test[features + ['id']])
 
 #    estimator = LogisticRegression(
 #        solver='liblinear',
@@ -247,32 +273,33 @@ def _submit(train, test, valid_y=None, **kwargs):
 #        penalty='l2',
 #        verbose=1)
 
-#    estimator = LogisticRegression(
-#        random_state=1,
-#        solver='lbfgs',
-#        max_iter=2020,
-#        fit_intercept=True,
-#        penalty='none',
-#        verbose=1)
+    estimator = LogisticRegression(
+        random_state=1,
+        solver='lbfgs',
+        max_iter=2020,
+        fit_intercept=True,
+        penalty='none',
+        verbose=1)
 
 #    estimator = CategoricalNB(alpha=0)
 #    estimator = BernoulliNB(alpha=1)
 
-#    clf = steps.Classifier(estimator)
+    clf = steps.Classifier(estimator)
 #    clf.cross_val(train[features].values, train['target'].values, n_splits=6, corr=False)
 #    submitter = steps.Submitter(clf)
 
-#    if valid_y is None:
-#        submitter = steps.Submitter(clf, config.path_to_data)
-#    else:
-#        submitter = steps.Submitter(clf)
+    if valid_y is None:
+        submitter = steps.Submitter(clf, config.path_to_data)
+    else:
+        submitter = steps.Submitter(clf)
 
-#    y_pred = submitter.fit(
-#        train[features], train['target']).predict_proba(test)
+    y_pred = submitter.fit(
+        train[features], train['target']).predict_proba(test)
 
     if valid_y is not None:
-        valid_y = valid_y.merge(y_pred[['id', 'mean']], how='left', on='id')
-        score = roc_auc_score(valid_y['y_true'].values, valid_y['mean'].values)
+#        valid_y = valid_y.merge(y_pred[['id', 'mean']], how='left', on='id')
+        valid_y = valid_y.merge(y_pred[['id', 'target']], how='left', on='id')
+        score = roc_auc_score(valid_y['y_true'].values, valid_y['target'].values)
         logger.info('')
         logger.debug(f'score: {score}')
         logger.info('')
