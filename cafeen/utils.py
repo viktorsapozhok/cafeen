@@ -85,8 +85,19 @@ def label_encoding(df, features):
     df = replace_na(df, features)
 
     for feature in features:
-        encoder = LabelEncoder()
-        df[feature] = encoder.fit(df[feature]).transform(df[feature])
+        if feature in ['ord_0', 'ord_1', 'ord_2', 'ord_3', 'ord_4', 'ord_5']:
+            encoding = df[df['target'] > -1].groupby(feature)['target'].agg(['mean', 'count'])
+            encoding.sort_values(by='mean', inplace=True)
+            encoding['label'] = list(range(len(encoding)))
+            df[feature] = df[feature].map(encoding['label'].to_dict())
+#        elif feature in ['ord_3', 'ord_4', 'ord_5']:
+#            encoding = df.groupby(feature)['target'].agg(['mean', 'count'])
+#            encoding.sort_index(inplace=True)
+#            encoding['label'] = list(range(len(encoding)))
+#            df[feature] = df[feature].map(encoding['label'].to_dict())
+        else:
+            encoder = LabelEncoder()
+            df[feature] = encoder.fit(df[feature]).transform(df[feature])
 
     return df
 

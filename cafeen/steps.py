@@ -17,12 +17,113 @@ from sklearn.base import (
 )
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score, make_scorer
-from sklearn.model_selection import StratifiedKFold, train_test_split
+from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
 
 from cafeen import utils
 
 optuna.logging.set_verbosity(optuna.logging.ERROR)
 logger = logging.getLogger('cafeen')
+
+
+class OneColClassifier(BaseEstimator):
+    def __init__(self, estimator, n_splits=1):
+        self.estimators = [estimator] * n_splits
+        self.n_splits = n_splits
+
+    def fit(self, x, y=None, early_stopping_rounds=100, verbose=20):
+        x, y = self.union_features(x, y)
+
+        if self.n_splits > 1:
+            score = 0
+            cv = KFold(n_splits=self.n_splits, shuffle=True, random_state=1)
+
+            for fold, (train_index, valid_index) in enumerate(cv.split(x, y)):
+                train_x, train_y = x[train_index], y[train_index]
+                valid_x, valid_y = x[valid_index], y[valid_index]
+
+                logger.info('')
+                logger.debug(f'started training on fold {fold}')
+                logger.info('')
+
+                self.estimators[fold].fit(
+                    train_x,
+                    train_y,
+                    eval_set=[(valid_x, valid_y)],
+                    eval_metric='auc',
+                    early_stopping_rounds=early_stopping_rounds,
+                    categorical_feature=[0],
+                    verbose=verbose)
+
+                score += self.estimators[fold].best_score_['valid_0']['auc']
+
+                logger.info('')
+                logger.debug(f'score: {score / self.n_splits:.4f}')
+                logger.info('')
+        else:
+            self.estimators[0].fit(
+                x, y,
+                categorical_feature=['feature'],
+                feature_name=['feature', 'value'],
+                verbose=verbose)
+
+        return self
+
+    def predict_proba(self, x):
+        features = list(x.columns)
+        x, _ = self.union_features(x, index=x['id'], return_df=True)
+
+        predicted = np.zeros(len(x))
+
+        for estimator in self.estimators:
+            p = estimator.predict_proba(x[['feature', 'value']])
+            predicted += p[:, 1] / self.n_splits
+
+        y_pred = self.decompose(x, predicted)
+
+        return y_pred
+
+    @staticmethod
+    def roc_auc_score(y_true, y_score):
+        return 'roc_auc', -roc_auc_score(y_true, y_score), False
+
+    @staticmethod
+    def union_features(x, y=None, index=None, return_df=False):
+        x_new = pd.DataFrame()
+
+        for i, col in enumerate(x.columns):
+            _x = pd.DataFrame()
+
+            if index is not None:
+                _x['id'] = x['id']
+
+            _x['value'] = x[col]
+
+            if y is not None:
+                _x['target'] = y
+
+            _x['feature'] = i
+            x_new = x_new.append(_x)
+
+        x_new['feature'] = x_new['feature'].astype('int')
+
+        if return_df:
+            x = x_new[['id', 'feature', 'value']]
+        else:
+            x = x_new[['feature', 'value']].values
+
+        if y is not None:
+            if return_df:
+                y = x_new['target']
+            else:
+                y = x_new['target'].values
+
+        return x, y
+
+    @staticmethod
+    def decompose(x, predicted):
+        x['target'] = predicted
+        y_pred = x.groupby('id')['target'].agg(['mean', 'min', 'max', 'prod'])
+        return y_pred.reset_index(level='id')
 
 
 class LgbClassifier(BaseEstimator):

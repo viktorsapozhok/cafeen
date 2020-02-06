@@ -6,7 +6,8 @@ import pandas as pd
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import KFold
 from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
-from sklearn.naive_bayes import CategoricalNB, ComplementNB
+from sklearn.naive_bayes import CategoricalNB, BernoulliNB
+from sklearn.preprocessing import StandardScaler
 
 from cafeen import config, steps, utils
 
@@ -18,11 +19,6 @@ def submit_1(**kwargs):
         nrows=kwargs.get('nrows', None),
         valid_rows=kwargs.get('valid_rows', 0))
     na_value = df[df['target'] > -1]['target'].mean()
-
-    df.loc[df['month'] == 10, 'month'] = 9
-    df['day'] = df['day'].map(str) + '-' + df['month'].map(str)
-    df.drop(columns=['month'], inplace=True)
-
     df_copy = df.copy()
 
     logger.info(f'na_value: {na_value}')
@@ -39,18 +35,33 @@ def submit_1(**kwargs):
     df.loc[df['ord_5'] == 'K', 'ord_5'] = 'L'
     df.loc[df['ord_5'] == 'E', 'ord_5'] = 'D'
 
+    df.loc[(df['month'] == 2) & (df['day'] == 2), 'day'] = 6
+    df.loc[(df['month'] == 4) & (df['day'] == 6), 'day'] = 7
+    df.loc[(df['month'] == 5) & (df['day'] == 7), 'day'] = 1
+    df.loc[(df['month'] == 10) & (df['day'] == 2), 'day'] = 1
+    df.loc[(df['month'] == 10) & (df['day'] == 6), 'day'] = 1
+    df.loc[(df['month'] == 10) & (df['day'] == 7), 'day'] = 1
+
     features = utils.get_features(df.columns)
     oe_features = [
         'ord_0', 'ord_1', 'ord_2', 'ord_3', 'ord_4', 'ord_5']
     ohe_features = [
         'bin_0', 'bin_1', 'bin_2', 'bin_3', 'bin_4',
-        'nom_0', 'nom_1', 'nom_2', 'nom_3', 'nom_4',
-        'day']
+        'nom_0', 'nom_1', 'nom_2', 'nom_3', 'nom_4', 'day', 'month']
     te_features = [f for f in features if (f not in oe_features) and (f not in ohe_features)]
+
+#    df = utils.label_encoding(df, oe_features)
+#    scaler = StandardScaler(copy=True)
+#    scaler.fit(df[oe_features])
+#    df[oe_features] = scaler.transform(df[oe_features])
 
     df = utils.target_encoding(df, oe_features + ohe_features, na_value=na_value)
 #    df = utils.target_encoding_cv(df, te_features, cv=KFold(n_splits=5, random_state=1), n_rounds=1, na_value=na_value)
-    df = utils.target_encoding_cv(df, te_features, cv=KFold(n_splits=5), n_rounds=1, na_value=na_value)
+#    df = utils.target_encoding_cv(df, te_features, cv=KFold(n_splits=5), n_rounds=1, na_value=na_value)
+
+    df = utils.target_encoding_cv(df, te_features, cv=KFold(n_splits=5))
+    df = utils.group_features(df, te_features, n_groups=20, min_group_size=5000)
+    df = utils.target_encoding(df, te_features)
 
     logger.info('')
 
@@ -65,6 +76,8 @@ def submit_1(**kwargs):
     for feature in features:
         logger.info(f'{feature}: {df[feature].nunique()}')
     logger.info('')
+
+#    df = utils.one_hot_encoding(df, features)
 
     assert df.isnull().sum().sum() == 0
 
@@ -203,57 +216,63 @@ def submit_3(**kwargs):
 
 
 def _submit(train, test, valid_y=None, **kwargs):
-#    estimator = steps.LgbClassifier(
-#        estimator=lgb.LGBMClassifier(
-#            objective='binary',
-#            metric='auc',
-#            is_unbalance=True,
-#            boost_from_average=False,
-#            n_estimators=kwargs.get('n_estimators', 100),
-#            learning_rate=kwargs.get('eta', 0.1),
-#            num_leaves=57,
-#            min_child_samples=35,
-#            colsample_bytree=0.3,
-#            reg_alpha=0.8,
-#            reg_lambda=1),
-#        n_splits=4)
+    estimator = steps.OneColClassifier(
+        estimator=lgb.LGBMClassifier(
+            objective='binary',
+            metric='auc',
+            is_unbalance=True,
+            boost_from_average=False,
+            n_estimators=kwargs.get('n_estimators', 100),
+            learning_rate=kwargs.get('eta', 0.1),
+            num_leaves=57,
+            min_child_samples=35,
+            colsample_bytree=0.3,
+            reg_alpha=0.8,
+            reg_lambda=1),
+        n_splits=1)
 
 #    estimator = LogisticRegression(solver='liblinear', C=0.095, verbose=1)
 
     features = utils.get_features(train.columns)
 
+    estimator.fit(train[features], train['target'])
+    y_pred = estimator.predict_proba(test[features + ['id']])
+
 #    estimator = LogisticRegression(
 #        solver='liblinear',
-#        C=1,
-#        class_weight='balanced',
+#        C=0.1,
+#       class_weight='balanced',
 #        max_iter=1000,
-#        tol=1e-5,
+#        tol=1e-9,
 #        penalty='l2',
 #        verbose=1)
 
-    estimator = LogisticRegression(
-        random_state=1,
-        solver='lbfgs',
-        max_iter=2020,
-        fit_intercept=True,
-        penalty='none',
-        verbose=1)
+#    estimator = LogisticRegression(
+#        random_state=1,
+#        solver='lbfgs',
+#        max_iter=2020,
+#        fit_intercept=True,
+#        penalty='none',
+#        verbose=1)
 
-#    estimator = CategoricalNB(alpha=1)
+#    estimator = CategoricalNB(alpha=0)
+#    estimator = BernoulliNB(alpha=1)
 
-    clf = steps.Classifier(estimator)
+#    clf = steps.Classifier(estimator)
 #    clf.cross_val(train[features].values, train['target'].values, n_splits=6, corr=False)
 #    submitter = steps.Submitter(clf)
 
-    submitter = steps.Submitter(clf, config.path_to_data)
-#    submitter.fit(train[features], train['target']).predict(test, features)
+#    if valid_y is None:
+#        submitter = steps.Submitter(clf, config.path_to_data)
+#    else:
+#        submitter = steps.Submitter(clf)
 
-    y_pred = submitter.fit(
-        train[features], train['target']).predict_proba(test)
+#    y_pred = submitter.fit(
+#        train[features], train['target']).predict_proba(test)
 
     if valid_y is not None:
-        valid_y = valid_y.merge(y_pred, how='left', on='id')
-        score = roc_auc_score(valid_y['y_true'].values, valid_y['target'].values)
+        valid_y = valid_y.merge(y_pred[['id', 'mean']], how='left', on='id')
+        score = roc_auc_score(valid_y['y_true'].values, valid_y['mean'].values)
         logger.info('')
         logger.debug(f'score: {score}')
         logger.info('')
