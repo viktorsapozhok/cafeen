@@ -29,7 +29,7 @@ def read_data(nrows=None, valid_rows=0):
     train = pd.read_csv(config.path_to_train, nrows=nrows)
 
     if valid_rows > 0:
-        random.seed(1)
+        random.seed(2)
         index = random.sample(list(train.index), valid_rows)
         test = train.loc[index, ['id', 'target']]
         train.loc[index, 'target'] = -1
@@ -98,6 +98,29 @@ def label_encoding(df, features):
         else:
             encoder = LabelEncoder()
             df[feature] = encoder.fit(df[feature]).transform(df[feature])
+
+    return df
+
+
+def lgb_encoding(df, features):
+    for feature in features:
+        counts = df.groupby(feature).size()
+        train = df[[feature, 'target']].copy()
+        train['count'] = train[feature].map(counts.to_dict())
+
+        estimator = lgb.LGBMClassifier(
+            objective='binary',
+            metric='auc',
+            is_unbalance=True,
+            n_estimators=5,
+            learning_rate=0.1,
+            num_leaves=22,
+            min_child_samples=2000)
+
+        mask = train['target'] > -1
+
+        estimator.fit(train.loc[mask, [feature]], train.loc[mask, 'target'])
+        df[feature] = estimator.predict_proba(train[[feature]])[:, 1]
 
     return df
 

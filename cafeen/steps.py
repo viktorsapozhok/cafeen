@@ -16,8 +16,9 @@ from sklearn.base import (
     TransformerMixin
 )
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import roc_auc_score, make_scorer
+from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
+from sklearn.preprocessing import OneHotEncoder
 
 from cafeen import utils
 
@@ -104,9 +105,7 @@ class Encoder(BaseEstimator, TransformerMixin):
         for feature in features:
             if self.handle_missing:
                 _x.loc[x[feature].isna(), feature] = na_value
-
             _x.loc[_x[feature].isna(), feature] = na_value
-
         logger.info('')
 
         for feature in features:
@@ -116,30 +115,32 @@ class Encoder(BaseEstimator, TransformerMixin):
             if self.log_alpha > 0:
                 _x[feature] = np.log(self.log_alpha + _x[feature])
 
-        one_hot_features = []
-
         logger.info('')
         logger.info('amount of unique values')
-
         for feature in features:
-            n_unique = _x[feature].nunique()
-
-            if n_unique < 120:
-                one_hot_features += [feature]
-
-            logger.info(f'{feature}: {n_unique}')
+            logger.info(f'{feature}: {_x[feature].nunique()}')
 
         logger.info('')
-
-        if self.one_hot_encoding:
-            _x = utils.one_hot_encoding(_x, one_hot_features)
-
         logger.info(f'data size: {_x.shape}')
         logger.info('')
 
         assert _x.isnull().sum().sum() == 0
 
-        return _x
+        _train, _test = utils.split_data(_x)
+        _train_y = _train['target'].values
+        _train_x = _train[features].values
+        _test_x = _test[features].values
+        _test_id = _test['id'].values
+
+        if self.one_hot_encoding:
+            encoder = OneHotEncoder(sparse=True)
+            encoder.fit(_x[features])
+            del _x
+
+            _train_x = encoder.transform(_train[features])
+            _test_x = encoder.transform(_test[features])
+
+        return _train_x, _train_y, _test_x, _test_id
 
     @staticmethod
     def get_na_value(x):
@@ -218,7 +219,7 @@ class OneColClassifier(BaseEstimator):
 
         return self
 
-    def predict_proba(self, x):
+    def predict_proba(self, x, valid):
         features = list(x.columns)
         x, _ = self.union_features(x, index=x['id'], return_df=True)
 
@@ -229,6 +230,20 @@ class OneColClassifier(BaseEstimator):
             predicted += p[:, 1] / self.n_splits
 
         y_pred = self.decompose(x, predicted)
+
+        train = valid.merge(y_pred, how='left', on='id')
+
+        _estimator = LogisticRegression(
+            random_state=1,
+            solver='lbfgs',
+            max_iter=2020,
+            fit_intercept=True,
+            penalty='none',
+            verbose=1)
+
+        y_pred['y_pred'] = _estimator.fit(
+            train[['mean', 'percentile_10', 'percentile_90']], train['y_true']).predict_proba(
+            train[['mean', 'percentile_10', 'percentile_90']])[:, 1]
 
         return y_pred
 
@@ -269,11 +284,17 @@ class OneColClassifier(BaseEstimator):
 
         return x, y
 
-    @staticmethod
-    def decompose(x, predicted):
+    def decompose(self, x, predicted):
         x['target'] = predicted
-        y_pred = x.groupby('id')['target'].agg(['mean', 'min', 'max', 'prod'])
+        y_pred = x.groupby('id')['target'].agg(['mean', self.percentile(10), self.percentile(90)])
         return y_pred.reset_index(level='id')
+
+    @staticmethod
+    def percentile(n):
+        def percentile_(x):
+            return np.percentile(x, n)
+        percentile_.__name__ = 'percentile_%s' % n
+        return percentile_
 
 
 class LgbClassifier(BaseEstimator):
@@ -394,13 +415,12 @@ class Submitter(BaseEstimator):
         self.results = pd.DataFrame()
 
     def fit(self, x, y=None, **fit_params):
-        self.estimator.fit(x.values, y.values, **fit_params)
+        self.estimator.fit(x, y, **fit_params)
         return self
 
-    def predict_proba(self, x):
-        self.results['id'] = x['id'].astype('int')
-        features = utils.get_features(x)
-        p = self.estimator.predict_proba(x[features].values)
+    def predict_proba(self, x, test_id=None):
+        self.results['id'] = test_id
+        p = self.estimator.predict_proba(x)
 
         if len(p.shape) == 2:
             self.results['target'] = p[:, 1]
@@ -422,76 +442,62 @@ class BayesSearch(BaseEstimator, TransformerMixin):
 
     def fit(self, x, y=None, valid=None):
         def _evaluate(trial):
-            n_groups = [0, 5, 10, 15, 17, 19, 20, 21, 22, 23, 25, 30]
-            group_size = [500, 1000, 2000, 5000]
-            n_splits = [2, 3, 4, 5, 6, 7, 8]
+            n_groups = [17, 18, 19, 20, 21, 22, 23, 24, 25]
+            group_size = [1000, 2000, 5000]
+            n_splits = [3, 4, 5, 6, 7, 8]
 
-            cardinal_encoding = {
-                'nom_5': {
-#                    'cv': KFold(n_splits=trial.suggest_categorical('cv_5', n_splits)),
-                    'cv': KFold(n_splits=5),
-                    'n_groups': trial.suggest_categorical('groups_5', n_groups),
-                    'min_group_size': 5000
-                },
-                'nom_6': {
-                    'cv': KFold(n_splits=5),
-                    'n_groups': trial.suggest_categorical('groups_6', n_groups),
-                    'min_group_size': 5000
-                },
-                'nom_7': {
-                    'cv': KFold(n_splits=5),
-                    'n_groups': trial.suggest_categorical('groups_7', n_groups),
-                    'min_group_size': 5000
-                },
-                'nom_8': {
-                    'cv': KFold(n_splits=5),
-                    'n_groups': trial.suggest_categorical('groups_8', n_groups),
-                    'min_group_size': 5000
-                },
-                'nom_9': {
-                    'cv': KFold(n_splits=5),
-                    'n_groups': trial.suggest_categorical('groups_9', n_groups),
-                    'min_group_size': 5000
-                }
-            }
+            cardinal_encoding = dict()
 
-            min_category_size = [2, 5, 10, 15, 20, 25, 30, 50]
-            correct_features = {
-#                'ord_4': trial.suggest_categorical('corr_ord_4', [True, False]),
-                'ord_4': True,
-                'ord_5': True,
-                'day': True
-            }
+            for feature in ['nom_5', 'nom_6', 'nom_7', 'nom_8', 'nom_9']:
+                fid = feature[-1]
+                cardinal_encoding[feature] = dict()
+                cardinal_encoding[feature]['cv'] = KFold(
+                    n_splits=trial.suggest_categorical('cv_' + str(fid), n_splits))
+                cardinal_encoding[feature]['n_groups'] = \
+                    trial.suggest_categorical('groups_' + str(fid), n_groups)
+                cardinal_encoding[feature]['min_group_size'] = \
+                    trial.suggest_categorical('size_' + str(fid), group_size)
+
+            min_cat_size = [2, 5, 10, 15, 20, 25, 30, 50]
+            correct_features = {'ord_4': True, 'ord_5': True, 'day': True}
 
             encoder = Encoder(
                 cardinal_encoding=cardinal_encoding,
                 handle_missing=True,
-                min_category_size=trial.suggest_categorical('min_category_size', min_category_size),
-                log_alpha=trial.suggest_discrete_uniform('log_alpha', 0, 0.5, 0.1),
-#                one_hot_encoding=trial.suggest_categorical('one_hot', [True, False]),
-                one_hot_encoding=False,
-                correct_features=correct_features
-            )
+                min_category_size=trial.suggest_categorical('min_cat_size', min_cat_size),
+                log_alpha=0,
+                one_hot_encoding=True,
+                correct_features=correct_features)
 
             estimator = LogisticRegression(
-                solver='liblinear',
                 random_state=1,
-                max_iter=2000,
+                C=0.1,
+                class_weight='balanced',
+                solver='liblinear',
+                max_iter=2020,
+                fit_intercept=True,
                 penalty='l2',
-                verbose=1,
-                C=trial.suggest_discrete_uniform('C', 0.05, 1, 0.05),
-                class_weight=trial.suggest_categorical('class_weight', ['balanced', None]))
+                verbose=1)
 
-            encoded = encoder.fit_transform(x)
-            _train, _test = utils.split_data(encoded)
-            del encoded
+#            estimator = OneColClassifier(
+#                estimator=lgb.LGBMClassifier(
+#                    objective='binary',
+#                    metric='auc',
+#                    is_unbalance=True,
+#                    boost_from_average=False,
+#                    n_estimators=trial.suggest_int('n_estimators', 5, 50),
+#                    learning_rate=trial.suggest_uniform('learning_rate', 0.005, 0.1),
+#                    num_leaves=trial.suggest_int('num_leaves', 3, 500),
+#                    min_child_samples=trial.suggest_int('min_child_samples', 1, 10000),
+#                    colsample_bytree=1),
+#                n_splits=1)
 
-            features = encoder.get_features(_train.columns)
+            _train_x, _train_y, _test_x, _test_id = encoder.fit_transform(x)
 
             predicted = pd.DataFrame()
-            predicted['id'] = _test['id']
-            predicted['y_pred'] = estimator.fit(_train[features], _train['target']).predict_proba(_test[features])[:, 1]
-            del _train, _test
+            predicted['id'] = _test_id
+            predicted['y_pred'] = estimator.fit(_train_x, _train_y).predict_proba(_test_x)[:, 1]
+            del _train_x, _test_x, _train_y, _test_id
 
             _valid = valid.merge(predicted, how='left', on='id')
             score = -roc_auc_score(_valid['y_true'].values, _valid['y_pred'].values)
