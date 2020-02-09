@@ -65,7 +65,7 @@ def submit_1(**kwargs):
         'day', 'month'] + ['ord_0', 'ord_3', 'ord_4']
     te_features = [f for f in features if f not in ohe_features + oe_features]
 
-    df = utils.target_encoding(df, ohe_features, na_value=na_value)
+    df = utils.target_encoding(df, ohe_features)
     df = utils.encode_ordinal(df, oe_features, na_value=na_value)
 
     df = utils.target_encoding_cv(df, ['nom_5'], cv=StratifiedKFold(n_splits=6, shuffle=True, random_state=2020))
@@ -79,13 +79,14 @@ def submit_1(**kwargs):
     df = utils.group_features(df, ['nom_8'], n_groups=27, min_group_size=None)
     df = utils.group_features(df, ['nom_9'], n_groups=22, min_group_size=None)
 
-#    df = utils.target_encoding_cv(df, te_features, cv=KFold(n_splits=5))
+    df = utils.target_encoding(df, te_features)
 
     logger.info('')
 
     for feature in features:
         if na_value is not None:
-            df.loc[df_copy[feature].isna(), feature] = na_value
+            if feature not in oe_features:
+                df.loc[df_copy[feature].isna(), feature] = na_value
         df.loc[df[feature].isna(), feature] = na_value
     logger.info('')
 

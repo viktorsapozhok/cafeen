@@ -113,7 +113,8 @@ class Encoder(BaseEstimator, TransformerMixin):
 
         for feature in features:
             if self.handle_missing:
-                _x.loc[x[feature].isna(), feature] = na_value
+                if feature not in self.ordinal_features:
+                    _x.loc[x[feature].isna(), feature] = na_value
             _x.loc[_x[feature].isna(), feature] = na_value
         logger.info('')
 
@@ -490,7 +491,7 @@ class BayesSearch(BaseEstimator, TransformerMixin):
             ordinal_features = []
 
             for i in range(6):
-                as_ordinal = trial.suggest_categorical('ord_' + str(i), [False, True])
+                as_ordinal = trial.suggest_categorical('ord_' + str(i), [False, False])
 
                 if as_ordinal:
                     ordinal_features += ['ord_' + str(i)]
@@ -553,7 +554,7 @@ class BayesSearch(BaseEstimator, TransformerMixin):
 #                n_splits=1)
 
             _x = x.sample(frac=1, random_state=2020).reset_index(drop=True)
-            cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=2020)
+            cv = StratifiedKFold(n_splits=2, shuffle=True, random_state=2020)
             scores = []
 
             for fold, (train_index, valid_index) in enumerate(cv.split(_x, _x['target'])):
