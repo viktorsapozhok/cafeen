@@ -1,4 +1,5 @@
 from datetime import datetime
+import gc
 import logging
 from os import path
 import warnings
@@ -11,6 +12,7 @@ import lightgbm as lgb
 import numpy as np
 import optuna
 import pandas as pd
+from scipy import sparse
 from sklearn.base import (
     BaseEstimator,
     TransformerMixin
@@ -29,6 +31,7 @@ logger = logging.getLogger('cafeen')
 class Encoder(BaseEstimator, TransformerMixin):
     def __init__(
             self,
+            ordinal_features=None,
             cardinal_encoding=None,
             handle_missing=True,
             min_category_size=17,
@@ -43,21 +46,25 @@ class Encoder(BaseEstimator, TransformerMixin):
         self.log_alpha = log_alpha
         self.one_hot_encoding = one_hot_encoding
 
+        if ordinal_features is None:
+            self.ordinal_features = []
+        else:
+            self.ordinal_features = ordinal_features
+
         self.nominal_features = None
-        self.ordinal_features = None
         self.cardinal_features = None
 
     def fit(self, x, y=None):
         features = self.get_features(x.columns)
 
-        self.nominal_features = [
-            'bin_0', 'bin_1', 'bin_2', 'bin_3', 'bin_4',
-            'nom_0', 'nom_1', 'nom_2', 'nom_3', 'nom_4',
-            'day', 'month'
-        ]
-        self.ordinal_features = [
+        ordinal_features = [
             'ord_0', 'ord_1', 'ord_2', 'ord_3', 'ord_4', 'ord_5'
         ]
+        self.nominal_features = \
+            ['bin_0', 'bin_1', 'bin_2', 'bin_3', 'bin_4',
+             'nom_0', 'nom_1', 'nom_2', 'nom_3', 'nom_4',
+             'day', 'month'] + \
+            [f for f in ordinal_features if f not in self.ordinal_features]
         self.cardinal_features = [
             feature for feature in features
             if feature not in self.nominal_features + self.ordinal_features]
@@ -83,8 +90,10 @@ class Encoder(BaseEstimator, TransformerMixin):
         if self.correct_features['day']:
             _x = self.correct_day(_x)
 
-        _x = utils.target_encoding(
-            _x, self.nominal_features + self.ordinal_features)
+        na_value = self.get_na_value(x)
+
+        _x = utils.target_encoding(_x, self.nominal_features)
+        _x = self.encode_ordinal(_x, self.ordinal_features, na_value)
 
         for feature in self.cardinal_features:
             cv = self.cardinal_encoding[feature]['cv']
@@ -100,7 +109,7 @@ class Encoder(BaseEstimator, TransformerMixin):
                     min_group_size=min_group_size)
                 _x = utils.target_encoding(_x, [feature])
 
-        na_value = self.get_na_value(x)
+        logger.info(f'na_value: {na_value:.5f}')
 
         for feature in features:
             if self.handle_missing:
@@ -120,10 +129,6 @@ class Encoder(BaseEstimator, TransformerMixin):
         for feature in features:
             logger.info(f'{feature}: {_x[feature].nunique()}')
 
-        logger.info('')
-        logger.info(f'data size: {_x.shape}')
-        logger.info('')
-
         assert _x.isnull().sum().sum() == 0
 
         _train, _test = utils.split_data(_x)
@@ -134,11 +139,18 @@ class Encoder(BaseEstimator, TransformerMixin):
 
         if self.one_hot_encoding:
             encoder = OneHotEncoder(sparse=True)
-            encoder.fit(_x[features])
+            encoder.fit(_x[self.nominal_features + self.cardinal_features])
             del _x
+            gc.collect()
 
-            _train_x = encoder.transform(_train[features])
-            _test_x = encoder.transform(_test[features])
+            _train_x = encoder.transform(_train[self.nominal_features + self.cardinal_features])
+            _train_x = sparse.hstack((_train_x, _train[self.ordinal_features].values))
+            _test_x = encoder.transform(_test[self.nominal_features + self.cardinal_features])
+            _test_x = sparse.hstack((_test_x, _test[self.ordinal_features].values))
+
+        logger.info('')
+        logger.info(f'train: {_train_x.shape}, test: {_test_x.shape}')
+        logger.info('')
 
         return _train_x, _train_y, _test_x, _test_id
 
@@ -175,6 +187,39 @@ class Encoder(BaseEstimator, TransformerMixin):
         return [feature for feature in features
                 if feature not in ['id', 'target']]
 
+    @staticmethod
+    def encode_ordinal(x, features, na_value):
+        train = x[x['target'] > -1].reset_index(drop=True)
+
+        for feature in features:
+            x.loc[x[feature].isna(), feature] = -1
+            train.loc[train[feature].isna(), feature] = -1
+
+            if feature in ['ord_0', 'ord_1', 'ord_2']:
+                p_min = train.groupby(feature)['target'].mean().min()
+                p_max = train.groupby(feature)['target'].mean().max()
+                encoding = train.groupby(feature)['target'].mean()
+                encoding.iloc[0] = na_value
+
+                encoding = (encoding - p_min) / (p_max - p_min)
+
+                x[feature] = x[feature].map(encoding.to_dict())
+            elif feature in ['ord_3', 'ord_4', 'ord_5']:
+                encoding = train.groupby(feature)['target'].agg(['mean', 'count'])
+                encoding['count'] = list(range(len(encoding)))
+
+                nan_pos = (na_value - encoding['mean'].iloc[1]) / \
+                          (encoding['mean'].iloc[-1] - encoding['mean'].iloc[1])
+
+                p_min = encoding['count'].iloc[1]
+                p_max = encoding['count'].iloc[-1]
+                encoding['count'].iloc[0] = p_min + nan_pos * (p_max - p_min)
+                encoding['count'] = (encoding['count'] - p_min) / (p_max - p_min)
+
+                x[feature] = x[feature].map(encoding['count'].to_dict())
+
+        return x
+
 
 class OneColClassifier(BaseEstimator):
     def __init__(self, estimator, n_splits=1):
@@ -186,7 +231,7 @@ class OneColClassifier(BaseEstimator):
 
         if self.n_splits > 1:
             score = 0
-            cv = KFold(n_splits=self.n_splits, shuffle=True, random_state=1)
+            cv = KFold(n_splits=self.n_splits, shuffle=True, random_state=2020)
 
             for fold, (train_index, valid_index) in enumerate(cv.split(x, y)):
                 train_x, train_y = x[train_index], y[train_index]
@@ -234,7 +279,7 @@ class OneColClassifier(BaseEstimator):
         train = valid.merge(y_pred, how='left', on='id')
 
         _estimator = LogisticRegression(
-            random_state=1,
+            random_state=2020,
             solver='lbfgs',
             max_iter=2020,
             fit_intercept=True,
@@ -313,7 +358,7 @@ class LgbClassifier(BaseEstimator):
             cv = StratifiedKFold(
                 n_splits=self.n_splits,
                 shuffle=True,
-                random_state=0)
+                random_state=2020)
 
             for fold, (train_index, valid_index) in enumerate(cv.split(x, y)):
                 train_x, train_y = x[train_index], y[train_index]
@@ -373,7 +418,7 @@ class Classifier(BaseEstimator):
         scores = []
 
         if n_splits > 1:
-            cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=0)
+            cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=2020)
 
             for fold, (train_index, valid_index) in enumerate(cv.split(x, y)):
                 train_x, train_y = x[train_index], y[train_index]
@@ -440,9 +485,17 @@ class BayesSearch(BaseEstimator, TransformerMixin):
     def __init__(self, n_trials=10):
         self.n_trials = n_trials
 
-    def fit(self, x, y=None, valid=None):
+    def fit(self, x, y=None):
         def _evaluate(trial):
-            n_groups = [17, 18, 19, 20, 21, 22, 23, 24, 25]
+            ordinal_features = []
+
+            for i in range(6):
+                as_ordinal = trial.suggest_categorical('ord_' + str(i), [False, True])
+
+                if as_ordinal:
+                    ordinal_features += ['ord_' + str(i)]
+
+            n_groups = [17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 30, 35]
             group_size = [1000, 2000, 5000]
             n_splits = [3, 4, 5, 6, 7, 8]
 
@@ -451,17 +504,24 @@ class BayesSearch(BaseEstimator, TransformerMixin):
             for feature in ['nom_5', 'nom_6', 'nom_7', 'nom_8', 'nom_9']:
                 fid = feature[-1]
                 cardinal_encoding[feature] = dict()
-                cardinal_encoding[feature]['cv'] = KFold(
-                    n_splits=trial.suggest_categorical('cv_' + str(fid), n_splits))
+                cardinal_encoding[feature]['cv'] = StratifiedKFold(
+                    n_splits=trial.suggest_categorical('cv_' + str(fid), n_splits),
+                    shuffle=True,
+                    random_state=2020)
                 cardinal_encoding[feature]['n_groups'] = \
                     trial.suggest_categorical('groups_' + str(fid), n_groups)
-                cardinal_encoding[feature]['min_group_size'] = \
-                    trial.suggest_categorical('size_' + str(fid), group_size)
+                cardinal_encoding[feature]['min_group_size'] = None
+#                    trial.suggest_categorical('size_' + str(fid), group_size)
 
             min_cat_size = [2, 5, 10, 15, 20, 25, 30, 50]
-            correct_features = {'ord_4': True, 'ord_5': True, 'day': True}
+            correct_features = {
+                'ord_4': trial.suggest_categorical('corr_ord_4', [False, True]),
+                'ord_5': trial.suggest_categorical('corr_ord_5', [False, True]),
+                'day': trial.suggest_categorical('corr_day', [False, True])
+            }
 
             encoder = Encoder(
+                ordinal_features=ordinal_features,
                 cardinal_encoding=cardinal_encoding,
                 handle_missing=True,
                 min_category_size=trial.suggest_categorical('min_cat_size', min_cat_size),
@@ -470,8 +530,8 @@ class BayesSearch(BaseEstimator, TransformerMixin):
                 correct_features=correct_features)
 
             estimator = LogisticRegression(
-                random_state=1,
-                C=0.1,
+                random_state=2020,
+                C=trial.suggest_uniform('C', 0.05, 1),
                 class_weight='balanced',
                 solver='liblinear',
                 max_iter=2020,
@@ -492,20 +552,44 @@ class BayesSearch(BaseEstimator, TransformerMixin):
 #                    colsample_bytree=1),
 #                n_splits=1)
 
-            _train_x, _train_y, _test_x, _test_id = encoder.fit_transform(x)
+            _x = x.sample(frac=1, random_state=2020).reset_index(drop=True)
+            cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=2020)
+            scores = []
 
-            predicted = pd.DataFrame()
-            predicted['id'] = _test_id
-            predicted['y_pred'] = estimator.fit(_train_x, _train_y).predict_proba(_test_x)[:, 1]
-            del _train_x, _test_x, _train_y, _test_id
+            for fold, (train_index, valid_index) in enumerate(cv.split(_x, _x['target'])):
+                logger.info('')
+                logger.debug(f'fold {fold} started')
+                logger.info('')
 
-            _valid = valid.merge(predicted, how='left', on='id')
-            score = -roc_auc_score(_valid['y_true'].values, _valid['y_pred'].values)
-            del _valid, predicted
+                train = _x.iloc[train_index]
+                valid = _x.iloc[valid_index]
 
-            self._print_trial(trial, score)
+                _valid = valid.copy()
+                _valid['target'] = -1
+                train = train.append(_valid).reset_index(drop=True)
+                del _valid
 
-            return score
+                _train_x, _train_y, _test_x, _test_id = encoder.fit_transform(train)
+
+                predicted = pd.DataFrame()
+                predicted['id'] = _test_id
+                predicted['y_pred'] = estimator.fit(_train_x, _train_y).predict_proba(_test_x)[:, 1]
+                del _train_x, _test_x, _train_y, _test_id
+
+                _valid = valid.merge(predicted, how='left', on='id')
+                score = -roc_auc_score(_valid['target'].values, _valid['y_pred'].values)
+                scores += [score]
+                del _valid, predicted
+                gc.collect()
+
+                logger.debug(f'score: {score:.5f}')
+
+            logger.info('')
+            logger.debug(f"scores: {', '.join([str(np.round(score, 5)) for score in scores])}, avg: {np.mean(scores):.6f}")
+
+            self._print_trial(trial, np.mean(scores))
+
+            return np.mean(scores)
 
         def _pack_best_trial(trial):
             pass

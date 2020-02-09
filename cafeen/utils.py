@@ -29,10 +29,19 @@ def read_data(nrows=None, valid_rows=0):
     train = pd.read_csv(config.path_to_train, nrows=nrows)
 
     if valid_rows > 0:
-        random.seed(2)
-        index = random.sample(list(train.index), valid_rows)
-        test = train.loc[index, ['id', 'target']]
-        train.loc[index, 'target'] = -1
+        train, test, train_y, test_y = train_test_split(
+            train,
+            train['target'],
+            test_size=valid_rows/len(train),
+            shuffle=True,
+            random_state=2020,
+            stratify=train['target'])
+
+        test['target'] = -1
+        train['target'] = train_y.values
+        train = train.append(test)
+
+        test['target'] = test_y.values
         test.rename(columns={'target': 'y_true'}, inplace=True)
 
         return train, test
@@ -145,6 +154,39 @@ def encode_ordinal_features(df, features, handle_missing='value'):
     return df
 
 
+def encode_ordinal(x, features, na_value=None):
+    train = x[x['target'] > -1].reset_index(drop=True)
+
+    for feature in features:
+        x.loc[x[feature].isna(), feature] = -1
+        train.loc[train[feature].isna(), feature] = -1
+
+        if feature in ['ord_0', 'ord_1', 'ord_2']:
+            p_min = train.groupby(feature)['target'].mean().min()
+            p_max = train.groupby(feature)['target'].mean().max()
+            encoding = train.groupby(feature)['target'].mean()
+            encoding.iloc[0] = na_value
+
+            encoding = (encoding - p_min) / (p_max - p_min)
+
+            x[feature] = x[feature].map(encoding.to_dict())
+        elif feature in ['ord_3', 'ord_4', 'ord_5']:
+            encoding = train.groupby(feature)['target'].agg(['mean', 'count'])
+            encoding['count'] = list(range(len(encoding)))
+
+            nan_pos = (na_value - encoding['mean'].iloc[1]) / \
+                      (encoding['mean'].iloc[-1] - encoding['mean'].iloc[1])
+
+            p_min = encoding['count'].iloc[1]
+            p_max = encoding['count'].iloc[-1]
+            encoding['count'].iloc[0] = p_min + nan_pos * (p_max - p_min)
+            encoding['count'] = (encoding['count'] - p_min) / (p_max - p_min)
+
+            x[feature] = x[feature].map(encoding['count'].to_dict())
+
+    return x
+
+
 def one_hot_encoding(df, features):
     encoder = OneHotEncoder(cols=features, return_df=True, use_cat_names=True)
     encoded = encoder.fit_transform(df[features])
@@ -234,15 +276,22 @@ def encode_na(df, features):
 
 def group_features(df, features, n_groups, min_group_size=500):
     for feature in features:
-        groups = df.groupby(feature)['target'].count()
-        group_index = list(groups[groups >= min_group_size].index)
+        if min_group_size is not None:
+            groups = df.groupby(feature)['target'].count()
+            group_index = list(groups[groups >= min_group_size].index)
+            grouped = ~df[feature].isin(group_index)
 
-        grouped = ~df[feature].isin(group_index)
+            df.loc[grouped, feature] = pd.qcut(
+                df.loc[grouped, feature],
+                n_groups,
+                labels=False,
+                duplicates='drop')
+        else:
+            df[feature] = pd.qcut(
+                df[feature], n_groups, labels=False, duplicates='drop')
 
-        df.loc[grouped, feature] = pd.qcut(df.loc[grouped, feature], n_groups, labels=False, duplicates='drop')
-
-        encoder = LabelEncoder()
-        df[feature] = encoder.fit(df[feature]).transform(df[feature])
+#        encoder = LabelEncoder()
+#        df[feature] = encoder.fit(df[feature]).transform(df[feature])
 
     return df
 
@@ -296,7 +345,7 @@ def eval_weights(train, features):
         train['target'],
         shuffle=True,
         train_size=0.7,
-        random_state=42)
+        random_state=2020)
 
     estimator = lgb.LGBMClassifier(n_estimators=50)
     estimator.fit(train_x, train_y)
