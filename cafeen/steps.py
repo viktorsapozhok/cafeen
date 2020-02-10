@@ -37,7 +37,8 @@ class Encoder(BaseEstimator, TransformerMixin):
             min_category_size=17,
             log_alpha=0.1,
             one_hot_encoding=True,
-            correct_features=None
+            correct_features=None,
+            verbose=True
     ):
         self.cardinal_encoding = cardinal_encoding
         self.handle_missing = handle_missing
@@ -45,6 +46,7 @@ class Encoder(BaseEstimator, TransformerMixin):
         self.correct_features = correct_features
         self.log_alpha = log_alpha
         self.one_hot_encoding = one_hot_encoding
+        self.verbose = verbose
 
         if ordinal_features is None:
             self.ordinal_features = []
@@ -57,17 +59,9 @@ class Encoder(BaseEstimator, TransformerMixin):
     def fit(self, x, y=None):
         features = self.get_features(x.columns)
 
-        ordinal_features = [
-            'ord_0', 'ord_1', 'ord_2', 'ord_3', 'ord_4', 'ord_5'
-        ]
-        self.nominal_features = \
-            ['bin_0', 'bin_1', 'bin_2', 'bin_3', 'bin_4',
-             'nom_0', 'nom_1', 'nom_2', 'nom_3', 'nom_4',
-             'day', 'month'] + \
-            [f for f in ordinal_features if f not in self.ordinal_features]
-        self.cardinal_features = [
-            feature for feature in features
-            if feature not in self.nominal_features + self.ordinal_features]
+        self.cardinal_features = list(self.cardinal_encoding.keys())
+        self.nominal_features = [f for f in features
+                                 if f not in self.cardinal_features + self.ordinal_features]
 
         return self
 
@@ -78,7 +72,7 @@ class Encoder(BaseEstimator, TransformerMixin):
 
         if self.min_category_size > 0:
             _x = utils.mark_as_na(
-                _x, self.cardinal_features, threshold=self.min_category_size)
+                _x, self.cardinal_features, threshold=self.min_category_size, verbose=self.verbose)
 
         _x['ord_5'] = x['ord_5'].str[0]
         _x.loc[x['ord_5'].isna(), 'ord_5'] = np.nan
@@ -93,14 +87,17 @@ class Encoder(BaseEstimator, TransformerMixin):
         na_value = self.get_na_value(x)
 
         _x = utils.target_encoding(_x, self.nominal_features)
-        _x = self.encode_ordinal(_x, self.ordinal_features, na_value)
+
+        ordinal_features = [f for f in features
+                            if f in self.ordinal_features and f not in self.cardinal_features]
+        _x = self.encode_ordinal(_x, ordinal_features, na_value)
 
         for feature in self.cardinal_features:
             cv = self.cardinal_encoding[feature]['cv']
             n_groups = self.cardinal_encoding[feature]['n_groups']
             min_group_size = self.cardinal_encoding[feature]['min_group_size']
 
-            _x = utils.target_encoding_cv(_x, [feature], cv=cv)
+            _x = utils.target_encoding_cv(_x, [feature], cv=cv, verbose=self.verbose)
 
             if n_groups > 0:
                 _x = utils.group_features(
@@ -109,26 +106,31 @@ class Encoder(BaseEstimator, TransformerMixin):
                     min_group_size=min_group_size)
                 _x = utils.target_encoding(_x, [feature])
 
-        logger.info(f'na_value: {na_value:.5f}')
+        if self.verbose:
+            logger.info(f'na_value: {na_value:.5f}')
 
         for feature in features:
             if self.handle_missing:
                 if feature not in self.ordinal_features:
                     _x.loc[x[feature].isna(), feature] = na_value
             _x.loc[_x[feature].isna(), feature] = na_value
-        logger.info('')
+
+        if self.verbose:
+            logger.info('')
 
         for feature in features:
-            logger.info(
-                f'{feature}: {_x[feature].min():.4f} - {_x[feature].max():.4f}')
+            if self.verbose:
+                logger.info(
+                    f'{feature}: {_x[feature].min():.4f} - {_x[feature].max():.4f}')
 
             if self.log_alpha > 0:
                 _x[feature] = np.log(self.log_alpha + _x[feature])
 
-        logger.info('')
-        logger.info('amount of unique values')
-        for feature in features:
-            logger.info(f'{feature}: {_x[feature].nunique()}')
+        if self.verbose:
+            logger.info('')
+            logger.info('amount of unique values')
+            for feature in features:
+                logger.info(f'{feature}: {_x[feature].nunique()}')
 
         assert _x.isnull().sum().sum() == 0
 
@@ -139,19 +141,24 @@ class Encoder(BaseEstimator, TransformerMixin):
         _test_id = _test['id'].values
 
         if self.one_hot_encoding:
+            ohe_features = [f for f in features if f not in self.ordinal_features] + \
+                           [f for f in self.ordinal_features if _x[f].nunique() > 100]
+            ordinal_features = [f for f in features if f not in ohe_features]
+
             encoder = OneHotEncoder(sparse=True)
-            encoder.fit(_x[self.nominal_features + self.cardinal_features])
+            encoder.fit(_x[ohe_features])
             del _x
             gc.collect()
 
-            _train_x = encoder.transform(_train[self.nominal_features + self.cardinal_features])
-            _train_x = sparse.hstack((_train_x, _train[self.ordinal_features].values))
-            _test_x = encoder.transform(_test[self.nominal_features + self.cardinal_features])
-            _test_x = sparse.hstack((_test_x, _test[self.ordinal_features].values))
+            _train_x = encoder.transform(_train[ohe_features])
+            _train_x = sparse.hstack((_train_x, _train[ordinal_features].values))
+            _test_x = encoder.transform(_test[ohe_features])
+            _test_x = sparse.hstack((_test_x, _test[ordinal_features].values))
 
-        logger.info('')
-        logger.info(f'train: {_train_x.shape}, test: {_test_x.shape}')
-        logger.info('')
+        if self.verbose:
+            logger.info('')
+            logger.info(f'train: {_train_x.shape}, test: {_test_x.shape}')
+            logger.info('')
 
         return _train_x, _train_y, _test_x, _test_id
 
@@ -205,7 +212,7 @@ class Encoder(BaseEstimator, TransformerMixin):
                 encoding = (encoding - p_min) / (p_max - p_min)
 
                 x[feature] = x[feature].map(encoding.to_dict())
-            elif feature in ['ord_3', 'ord_4', 'ord_5']:
+            else:
                 encoding = train.groupby(feature)['target'].agg(['mean', 'count'])
                 encoding['count'] = list(range(len(encoding)))
 
@@ -214,7 +221,7 @@ class Encoder(BaseEstimator, TransformerMixin):
 
                 p_min = encoding['count'].iloc[1]
                 p_max = encoding['count'].iloc[-1]
-                encoding['count'].iloc[0] = p_min + nan_pos * (p_max - p_min)
+                encoding.loc[encoding.index == -1, 'count'] = p_min + nan_pos * (p_max - p_min)
                 encoding['count'] = (encoding['count'] - p_min) / (p_max - p_min)
 
                 x[feature] = x[feature].map(encoding['count'].to_dict())
@@ -483,22 +490,33 @@ class Submitter(BaseEstimator):
 
 
 class BayesSearch(BaseEstimator, TransformerMixin):
-    def __init__(self, n_trials=10):
+    def __init__(self, n_trials=10, verbose=True):
         self.n_trials = n_trials
+        self.verbose = verbose
 
     def fit(self, x, y=None):
         def _evaluate(trial):
             ordinal_features = []
 
             for i in range(6):
-                as_ordinal = trial.suggest_categorical('ord_' + str(i), [False, False])
-
+                as_ordinal = trial.suggest_categorical('ord_' + str(i), [True, False])
                 if as_ordinal:
                     ordinal_features += ['ord_' + str(i)]
 
-            n_groups = [17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 30, 35]
-            group_size = [1000, 2000, 5000]
+            for i in range(5, 10):
+                as_ordinal = trial.suggest_categorical('nom_' + str(i), [True, False])
+                if as_ordinal:
+                    ordinal_features += ['nom_' + str(i)]
+
+            n_groups = [10, 13, 15, 19, 20, 23, 25, 30]
             n_splits = [3, 4, 5, 6, 7, 8]
+            group_size = {
+                'nom_5': [None, 1000, 1500],
+                'nom_6': [None, 900, 1200],
+                'nom_7': [None, 4000, 8000],
+                'nom_8': [None, 4000, 8000],
+                'nom_9': [None, 500, 840],
+            }
 
             cardinal_encoding = dict()
 
@@ -506,19 +524,20 @@ class BayesSearch(BaseEstimator, TransformerMixin):
                 fid = feature[-1]
                 cardinal_encoding[feature] = dict()
                 cardinal_encoding[feature]['cv'] = StratifiedKFold(
-                    n_splits=trial.suggest_categorical('cv_' + str(fid), n_splits),
+                    n_splits=5,
+#                    n_splits=trial.suggest_categorical('cv_' + str(fid), n_splits),
                     shuffle=True,
                     random_state=2020)
                 cardinal_encoding[feature]['n_groups'] = \
                     trial.suggest_categorical('groups_' + str(fid), n_groups)
-                cardinal_encoding[feature]['min_group_size'] = None
-#                    trial.suggest_categorical('size_' + str(fid), group_size)
+                cardinal_encoding[feature]['min_group_size'] = \
+                    trial.suggest_categorical('size_' + str(fid), group_size[feature])
 
-            min_cat_size = [2, 5, 10, 15, 20, 25, 30, 50]
+            min_cat_size = [70, 80, 90, 100, 120, 150]
             correct_features = {
-                'ord_4': trial.suggest_categorical('corr_ord_4', [False, True]),
-                'ord_5': trial.suggest_categorical('corr_ord_5', [False, True]),
-                'day': trial.suggest_categorical('corr_day', [False, True])
+                'ord_4': True, #trial.suggest_categorical('corr_ord_4', [False, True]),
+                'ord_5': False, #trial.suggest_categorical('corr_ord_5', [False, True]),
+                'day': True, #trial.suggest_categorical('corr_day', [False, True])
             }
 
             encoder = Encoder(
@@ -528,42 +547,34 @@ class BayesSearch(BaseEstimator, TransformerMixin):
                 min_category_size=trial.suggest_categorical('min_cat_size', min_cat_size),
                 log_alpha=0,
                 one_hot_encoding=True,
-                correct_features=correct_features)
+                correct_features=correct_features,
+                verbose=self.verbose)
 
             estimator = LogisticRegression(
                 random_state=2020,
-                C=trial.suggest_uniform('C', 0.05, 1),
+                C=trial.suggest_uniform('C', 0.1, 0.5),
                 class_weight='balanced',
                 solver='liblinear',
                 max_iter=2020,
                 fit_intercept=True,
                 penalty='l2',
-                verbose=1)
+                verbose=0)
 
-#            estimator = OneColClassifier(
-#                estimator=lgb.LGBMClassifier(
-#                    objective='binary',
-#                    metric='auc',
-#                    is_unbalance=True,
-#                    boost_from_average=False,
-#                    n_estimators=trial.suggest_int('n_estimators', 5, 50),
-#                    learning_rate=trial.suggest_uniform('learning_rate', 0.005, 0.1),
-#                    num_leaves=trial.suggest_int('num_leaves', 3, 500),
-#                    min_child_samples=trial.suggest_int('min_child_samples', 1, 10000),
-#                    colsample_bytree=1),
-#                n_splits=1)
-
-            _x = x.sample(frac=1, random_state=2020).reset_index(drop=True)
-            cv = StratifiedKFold(n_splits=2, shuffle=True, random_state=2020)
             scores = []
+            _x = x.copy()
 
-            for fold, (train_index, valid_index) in enumerate(cv.split(_x, _x['target'])):
-                logger.info('')
-                logger.debug(f'fold {fold} started')
-                logger.info('')
+            for fold in range(3):
+                if self.verbose:
+                    logger.info('')
+                    logger.debug(f'fold {fold} started')
+                    logger.info('')
 
-                train = _x.iloc[train_index]
-                valid = _x.iloc[valid_index]
+                train, valid, _, _ = train_test_split(
+                    _x, _x['target'],
+                    test_size=0.5,
+                    shuffle=True,
+                    random_state=fold,
+                    stratify=_x['target'])
 
                 _valid = valid.copy()
                 _valid['target'] = -1
@@ -583,7 +594,8 @@ class BayesSearch(BaseEstimator, TransformerMixin):
                 del _valid, predicted
                 gc.collect()
 
-                logger.debug(f'score: {score:.5f}')
+                if self.verbose:
+                    logger.debug(f'score: {score:.5f}')
 
             logger.info('')
             logger.debug(f"scores: {', '.join([str(np.round(score, 5)) for score in scores])}, avg: {np.mean(scores):.6f}")

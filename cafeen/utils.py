@@ -212,7 +212,7 @@ def target_encoding(df, features, na_value=None):
     return df
 
 
-def target_encoding_cv(df, features, cv=None, n_rounds=1, na_value=None):
+def target_encoding_cv(df, features, cv=None, n_rounds=1, na_value=None, verbose=True):
     train, test = split_data(df)
     del df
 
@@ -226,13 +226,15 @@ def target_encoding_cv(df, features, cv=None, n_rounds=1, na_value=None):
             shuffle=True)
 
     for _iter in range(n_rounds):
-        logger.debug(f'iteration {_iter + 1}')
+        if verbose:
+            logger.debug(f'iteration {_iter + 1}')
 
         _encoded = pd.DataFrame()
 
         for fold, (train_index, valid_index) in enumerate(
                 cv.split(train[features], train['target'])):
-            logger.info(f'target encoding on fold {fold + 1}')
+            if verbose:
+                logger.info(f'target encoding on fold {fold + 1}')
 
             encoder = steps.TargetEncoder(na_value=na_value)
 
@@ -304,7 +306,7 @@ def add_counts(df, features):
     return df
 
 
-def mark_as_na(df, features, threshold=None, alpha=None):
+def mark_as_na(df, features, threshold=None, alpha=None, verbose=True):
     for feature in features:
         if threshold is not None:
             counts = df.groupby(feature)['target'].count()
@@ -313,8 +315,9 @@ def mark_as_na(df, features, threshold=None, alpha=None):
 
             df.loc[df[feature].isin(categories), feature] = np.nan
 
-            logger.info(
-                f'{feature}: {df[feature].isna().sum() - n_nan} marked as NaN')
+            if verbose:
+                logger.info(
+                    f'{feature}: {df[feature].isna().sum() - n_nan} marked as NaN')
 
         if alpha is not None:
             _encoded = df[[feature, 'target']].copy()
@@ -326,8 +329,9 @@ def mark_as_na(df, features, threshold=None, alpha=None):
 
             df.loc[mask, feature] = np.nan
 
-            logger.info(
-                f'{feature}: {mask.sum()} marked as NaN')
+            if verbose:
+                logger.info(
+                    f'{feature}: {mask.sum()} marked as NaN')
 
     return df
 

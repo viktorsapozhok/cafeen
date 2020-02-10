@@ -18,103 +18,48 @@ logger = logging.getLogger('cafeen')
 def submit_1(**kwargs):
     nrows = kwargs.get('nrows', None)
 
-    min_cat_size = None
-    C = 0.982
-    corr_ord_4 = False
-    corr_ord_5 = True
-    corr_day = False
+    ordinal_features = ['ord_1', 'ord_5', 'nom_6']
+    splits = [3, 6, 3, 6, 7]
+    groups = [23, 19, 13, 24, 23]
+    group_size = [None, 900, 8000, None, None]
+
+    cardinal_encoding = dict()
+
+    for i, feature in enumerate(['nom_5', 'nom_6', 'nom_7', 'nom_8', 'nom_9']):
+        cardinal_encoding[feature] = dict()
+        cardinal_encoding[feature]['cv'] = StratifiedKFold(
+            n_splits=splits[i],
+            shuffle=True,
+            random_state=2020)
+        cardinal_encoding[feature]['n_groups'] = groups[i]
+        cardinal_encoding[feature]['min_group_size'] = group_size[i]
+
+    correct_features = {
+        'ord_4': True,
+        'ord_5': False,
+        'day': True
+    }
 
     df, valid_y = utils.read_data(
         nrows=nrows,
         valid_rows=kwargs.get('valid_rows', 0))
 
-    if nrows is None:
-        df = utils.mark_as_na(df, ['nom_5', 'nom_6', 'nom_7', 'nom_8', 'nom_9'], threshold=min_cat_size)
+    encoder = steps.Encoder(
+        ordinal_features=ordinal_features,
+        cardinal_encoding=cardinal_encoding,
+        handle_missing=True,
+        min_category_size=70,
+        log_alpha=0,
+        one_hot_encoding=True,
+        correct_features=correct_features)
 
-    na_value = df[df['target'] > -1]['target'].mean()
-    df_copy = df.copy()
-
-    logger.info(f'na_value: {na_value}')
-
-    if corr_ord_4:
-        df.loc[df['ord_4'] == 'J', 'ord_4'] = 'K'
-        df.loc[df['ord_4'] == 'L', 'ord_4'] = 'M'
-        df.loc[df['ord_4'] == 'S', 'ord_4'] = 'R'
-
-    df['ord_5'] = df_copy['ord_5'].str[0]
-    df.loc[df_copy['ord_5'].isna(), 'ord_5'] = np.nan
-
-    if corr_ord_5:
-        df.loc[df['ord_5'] == 'Z', 'ord_5'] = 'Y'
-        df.loc[df['ord_5'] == 'K', 'ord_5'] = 'L'
-        df.loc[df['ord_5'] == 'E', 'ord_5'] = 'D'
-
-    if corr_day:
-        df.loc[(df['month'] == 2) & (df['day'] == 2), 'day'] = 6
-        df.loc[(df['month'] == 4) & (df['day'] == 6), 'day'] = 7
-        df.loc[(df['month'] == 5) & (df['day'] == 7), 'day'] = 1
-        df.loc[(df['month'] == 10) & (df['day'] == 2), 'day'] = 1
-        df.loc[(df['month'] == 10) & (df['day'] == 6), 'day'] = 1
-        df.loc[(df['month'] == 10) & (df['day'] == 7), 'day'] = 1
-
-    features = utils.get_features(df.columns)
-    oe_features = ['ord_1', 'ord_2', 'ord_5']
-    ohe_features = [
-        'bin_0', 'bin_1', 'bin_2', 'bin_3', 'bin_4',
-        'nom_0', 'nom_1', 'nom_2', 'nom_3', 'nom_4',
-        'day', 'month'] + ['ord_0', 'ord_3', 'ord_4']
-    te_features = [f for f in features if f not in ohe_features + oe_features]
-
-    df = utils.target_encoding(df, ohe_features)
-    df = utils.encode_ordinal(df, oe_features, na_value=na_value)
-
-    df = utils.target_encoding_cv(df, ['nom_5'], cv=StratifiedKFold(n_splits=6, shuffle=True, random_state=2020))
-    df = utils.target_encoding_cv(df, ['nom_6'], cv=StratifiedKFold(n_splits=5, shuffle=True, random_state=2020))
-    df = utils.target_encoding_cv(df, ['nom_7'], cv=StratifiedKFold(n_splits=3, shuffle=True, random_state=2020))
-    df = utils.target_encoding_cv(df, ['nom_8'], cv=StratifiedKFold(n_splits=8, shuffle=True, random_state=2020))
-    df = utils.target_encoding_cv(df, ['nom_9'], cv=StratifiedKFold(n_splits=8, shuffle=True, random_state=2020))
-    df = utils.group_features(df, ['nom_5'], n_groups=25, min_group_size=None)
-    df = utils.group_features(df, ['nom_6'], n_groups=27, min_group_size=None)
-    df = utils.group_features(df, ['nom_7'], n_groups=22, min_group_size=None)
-    df = utils.group_features(df, ['nom_8'], n_groups=27, min_group_size=None)
-    df = utils.group_features(df, ['nom_9'], n_groups=22, min_group_size=None)
-
-    df = utils.target_encoding(df, te_features)
-
-    logger.info('')
-
-    for feature in features:
-        if na_value is not None:
-            if feature not in oe_features:
-                df.loc[df_copy[feature].isna(), feature] = na_value
-        df.loc[df[feature].isna(), feature] = na_value
-    logger.info('')
-
-    del df_copy
-
-    logger.info('amount of unique values')
-    for feature in features:
-        logger.info(f'{feature}: {df[feature].nunique()}')
-
-    logger.info('')
-
-    assert df.isnull().sum().sum() == 0
-
-    encoder = OneHotEncoder(sparse=True)
-    encoder.fit(df[ohe_features + te_features])
-    train, test = utils.split_data(df)
-    del df
-
-    train_x = encoder.transform(train[ohe_features + te_features])
-    train_x = sparse.hstack((train_x, train[oe_features].values))
-    test_x = encoder.transform(test[ohe_features + te_features])
-    test_x = sparse.hstack((test_x, test[oe_features].values))
+    train_x, train_y, test_x, test_id = encoder.fit_transform(df)
 
     logger.debug(f'train: {train_x.shape}, test: {test_x.shape}')
 
     estimator = LogisticRegression(
         random_state=2020,
-        C=C,
+        C=0.495,
         class_weight='balanced',
         solver='liblinear',
         max_iter=2020,
@@ -129,8 +74,7 @@ def submit_1(**kwargs):
     else:
         submitter = steps.Submitter(clf)
 
-    y_pred = submitter.fit(
-        train_x, train['target'].values).predict_proba(test_x, test_id=test['id'].values)
+    y_pred = submitter.fit(train_x, train_y).predict_proba(test_x, test_id=test_id)
 
     if valid_y is not None:
         valid_y = valid_y.merge(y_pred[['id', 'target']], how='left', on='id')
@@ -236,7 +180,7 @@ def submit_4(**kwargs):
     logger.info('reading train')
     train = pd.read_csv(config.path_to_train, nrows=kwargs.get('nrows', None))
 
-    bs = steps.BayesSearch(n_trials=100)
+    bs = steps.BayesSearch(n_trials=500, verbose=kwargs.get('verbose'))
     bs.fit(train)
 
 
