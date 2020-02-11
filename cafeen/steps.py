@@ -132,7 +132,7 @@ class Encoder(BaseEstimator, TransformerMixin):
             for feature in features:
                 logger.info(f'{feature}: {_x[feature].nunique()}')
 
-        assert _x.isnull().sum().sum() == 0
+        assert _x[features].isnull().sum().sum() == 0
 
         _train, _test = utils.split_data(_x)
         _train_y = _train['target'].values
@@ -193,7 +193,11 @@ class Encoder(BaseEstimator, TransformerMixin):
     @staticmethod
     def get_features(features):
         return [feature for feature in features
-                if feature not in ['id', 'target']]
+                if feature not in ['id', 'target'] +
+                ['nom_5', 'nom_6', 'nom_7', 'nom_8', 'nom_9',
+                 'nom_0', 'nom_1', 'nom_2', 'nom_3', 'nom_4',
+                 'ord_0', 'ord_1', 'ord_2', 'ord_3', 'ord_4', 'ord_5',
+                 'bin_3', 'day', 'month', 'bin_1']]
 
     @staticmethod
     def encode_ordinal(x, features, na_value):
@@ -227,6 +231,193 @@ class Encoder(BaseEstimator, TransformerMixin):
                 x[feature] = x[feature].map(encoding['count'].to_dict())
 
         return x
+
+
+class BayesSearch(BaseEstimator, TransformerMixin):
+    def __init__(self, n_trials=10, verbose=True):
+        self.n_trials = n_trials
+        self.verbose = verbose
+
+    def fit(self, x, y=None):
+        def _evaluate(trial):
+            ordinal_features = []
+
+            for i in range(6):
+                as_ordinal = trial.suggest_categorical('ord_' + str(i), [False, True])
+                if as_ordinal:
+                    ordinal_features += ['ord_' + str(i)]
+
+            for i in range(5, 10):
+                as_ordinal = trial.suggest_categorical('nom_' + str(i), [False, False])
+                if as_ordinal:
+                    ordinal_features += ['nom_' + str(i)]
+
+            n_groups = [10, 13, 15, 19, 20, 23, 25, 30]
+            n_splits = [3, 4, 5, 6, 7, 8]
+            group_size = {
+                'nom_5': [None, 1000, 1500],
+                'nom_6': [None, 900, 1200],
+                'nom_7': [None, 4000, 8000],
+                'nom_8': [None, 4000, 8000],
+                'nom_9': [None, 500, 840],
+            }
+
+            cardinal_encoding = dict()
+
+            for feature in ['nom_5', 'nom_6', 'nom_7', 'nom_8', 'nom_9']:
+                fid = feature[-1]
+                cardinal_encoding[feature] = dict()
+                cardinal_encoding[feature]['cv'] = StratifiedKFold(
+                    n_splits=5,
+#                    n_splits=trial.suggest_categorical('cv_' + str(fid), n_splits),
+                    shuffle=True,
+                    random_state=2020)
+                cardinal_encoding[feature]['n_groups'] = \
+                    trial.suggest_categorical('groups_' + str(fid), n_groups)
+                cardinal_encoding[feature]['min_group_size'] = \
+                    trial.suggest_categorical('size_' + str(fid), group_size[feature])
+
+            cardinal_encoding = {}
+
+            min_cat_size = [70, 80, 90, 100, 120, 150]
+            correct_features = {
+                'ord_4': True, #trial.suggest_categorical('corr_ord_4', [False, True]),
+                'ord_5': False, #trial.suggest_categorical('corr_ord_5', [False, True]),
+                'day': True, #trial.suggest_categorical('corr_day', [False, True])
+            }
+
+            encoder = Encoder(
+                ordinal_features=ordinal_features,
+                cardinal_encoding=cardinal_encoding,
+                handle_missing=True,
+                min_category_size=trial.suggest_categorical('min_cat_size', min_cat_size),
+                log_alpha=0,
+                one_hot_encoding=True,
+                correct_features=correct_features,
+                verbose=self.verbose)
+
+            estimator = LogisticRegression(
+                random_state=2020,
+                C=trial.suggest_uniform('C', 0.1, 0.5),
+                class_weight='balanced',
+                solver='liblinear',
+                max_iter=2020,
+                fit_intercept=True,
+                penalty='l2',
+                verbose=0)
+
+            scores = []
+            _x = x.copy()
+
+            for fold in range(3):
+                if self.verbose:
+                    logger.info('')
+                    logger.debug(f'fold {fold} started')
+                    logger.info('')
+
+                train, valid, _, _ = train_test_split(
+                    _x, _x['target'],
+                    test_size=0.5,
+                    shuffle=True,
+                    random_state=fold,
+                    stratify=_x['target'])
+
+                _valid = valid.copy()
+                _valid['target'] = -1
+                train = train.append(_valid).reset_index(drop=True)
+                del _valid
+
+                _train_x, _train_y, _test_x, _test_id = encoder.fit_transform(train)
+
+                predicted = pd.DataFrame()
+                predicted['id'] = _test_id
+                predicted['y_pred'] = estimator.fit(_train_x, _train_y).predict_proba(_test_x)[:, 1]
+                del _train_x, _test_x, _train_y, _test_id
+
+                _valid = valid.merge(predicted, how='left', on='id')
+                score = -roc_auc_score(_valid['target'].values, _valid['y_pred'].values)
+                scores += [score]
+                del _valid, predicted
+                gc.collect()
+
+                if self.verbose:
+                    logger.debug(f'score: {score:.5f}')
+
+            logger.info('')
+            logger.debug(f"scores: {', '.join([str(np.round(score, 5)) for score in scores])}, avg: {np.mean(scores):.6f}")
+
+            self._print_trial(trial, np.mean(scores))
+
+            return np.mean(scores)
+
+        def _pack_best_trial(trial):
+            pass
+
+#        train_x = x.copy
+        study = optuna.create_study()
+        study.optimize(_evaluate, n_trials=self.n_trials)
+
+        # compare best_trial vs model from file and save the best one
+        _pack_best_trial(study.best_trial)
+
+        return self
+
+    def transform(self, x, y=None):
+        return x
+
+    def _print_trial(self, trial, score):
+        info = f'trial {trial.number:2.0f}: '
+        info += self._params2str(trial.params)
+        info += f'score: {score:6.5f}'
+
+        is_best = False
+
+        if trial.number > 0:
+            info += f', best: {min(score, trial.study.best_value):6.5f}'
+
+            if score < trial.study.best_value:
+                is_best = True
+        elif trial.number < 0:
+            if score < trial.study_best_value:
+                is_best = True
+
+        logger.info('')
+
+        if is_best:
+            logger.debug(info)
+        else:
+            logger.info(info)
+
+        logger.info('')
+
+    @staticmethod
+    def _create_trial(estimator, number, best_value):
+        trial = optuna.trial.FixedTrial(estimator.get_params())
+        setattr(trial, 'number', number)
+        setattr(trial, 'study_best_value', best_value)
+        return trial
+
+    @staticmethod
+    def _params2str(params):
+        info = ''
+        for key in params:
+            if params[key] is None:
+                info += f'{key}: None, '
+            else:
+                if isinstance(params[key], int):
+                    info += f'{key}: {params[key]:.0f}, '
+                elif isinstance(params[key], str):
+                    info += f'{key}: {params[key]}, '
+                elif isinstance(params[key], bool):
+                    info += f'{key}: {str(params[key])}, '
+                else:
+                    info += f'{key}: {params[key]:.3f}, '
+        return info
+
+    @staticmethod
+    def _get_params(params):
+        _params = dict(params)
+        return _params
 
 
 class OneColClassifier(BaseEstimator):
@@ -487,191 +678,6 @@ class Submitter(BaseEstimator):
             self.results.to_csv(path_to_file, index=False)
 
         return self.results
-
-
-class BayesSearch(BaseEstimator, TransformerMixin):
-    def __init__(self, n_trials=10, verbose=True):
-        self.n_trials = n_trials
-        self.verbose = verbose
-
-    def fit(self, x, y=None):
-        def _evaluate(trial):
-            ordinal_features = []
-
-            for i in range(6):
-                as_ordinal = trial.suggest_categorical('ord_' + str(i), [True, False])
-                if as_ordinal:
-                    ordinal_features += ['ord_' + str(i)]
-
-            for i in range(5, 10):
-                as_ordinal = trial.suggest_categorical('nom_' + str(i), [True, False])
-                if as_ordinal:
-                    ordinal_features += ['nom_' + str(i)]
-
-            n_groups = [10, 13, 15, 19, 20, 23, 25, 30]
-            n_splits = [3, 4, 5, 6, 7, 8]
-            group_size = {
-                'nom_5': [None, 1000, 1500],
-                'nom_6': [None, 900, 1200],
-                'nom_7': [None, 4000, 8000],
-                'nom_8': [None, 4000, 8000],
-                'nom_9': [None, 500, 840],
-            }
-
-            cardinal_encoding = dict()
-
-            for feature in ['nom_5', 'nom_6', 'nom_7', 'nom_8', 'nom_9']:
-                fid = feature[-1]
-                cardinal_encoding[feature] = dict()
-                cardinal_encoding[feature]['cv'] = StratifiedKFold(
-                    n_splits=5,
-#                    n_splits=trial.suggest_categorical('cv_' + str(fid), n_splits),
-                    shuffle=True,
-                    random_state=2020)
-                cardinal_encoding[feature]['n_groups'] = \
-                    trial.suggest_categorical('groups_' + str(fid), n_groups)
-                cardinal_encoding[feature]['min_group_size'] = \
-                    trial.suggest_categorical('size_' + str(fid), group_size[feature])
-
-            min_cat_size = [70, 80, 90, 100, 120, 150]
-            correct_features = {
-                'ord_4': True, #trial.suggest_categorical('corr_ord_4', [False, True]),
-                'ord_5': False, #trial.suggest_categorical('corr_ord_5', [False, True]),
-                'day': True, #trial.suggest_categorical('corr_day', [False, True])
-            }
-
-            encoder = Encoder(
-                ordinal_features=ordinal_features,
-                cardinal_encoding=cardinal_encoding,
-                handle_missing=True,
-                min_category_size=trial.suggest_categorical('min_cat_size', min_cat_size),
-                log_alpha=0,
-                one_hot_encoding=True,
-                correct_features=correct_features,
-                verbose=self.verbose)
-
-            estimator = LogisticRegression(
-                random_state=2020,
-                C=trial.suggest_uniform('C', 0.1, 0.5),
-                class_weight='balanced',
-                solver='liblinear',
-                max_iter=2020,
-                fit_intercept=True,
-                penalty='l2',
-                verbose=0)
-
-            scores = []
-            _x = x.copy()
-
-            for fold in range(3):
-                if self.verbose:
-                    logger.info('')
-                    logger.debug(f'fold {fold} started')
-                    logger.info('')
-
-                train, valid, _, _ = train_test_split(
-                    _x, _x['target'],
-                    test_size=0.5,
-                    shuffle=True,
-                    random_state=fold,
-                    stratify=_x['target'])
-
-                _valid = valid.copy()
-                _valid['target'] = -1
-                train = train.append(_valid).reset_index(drop=True)
-                del _valid
-
-                _train_x, _train_y, _test_x, _test_id = encoder.fit_transform(train)
-
-                predicted = pd.DataFrame()
-                predicted['id'] = _test_id
-                predicted['y_pred'] = estimator.fit(_train_x, _train_y).predict_proba(_test_x)[:, 1]
-                del _train_x, _test_x, _train_y, _test_id
-
-                _valid = valid.merge(predicted, how='left', on='id')
-                score = -roc_auc_score(_valid['target'].values, _valid['y_pred'].values)
-                scores += [score]
-                del _valid, predicted
-                gc.collect()
-
-                if self.verbose:
-                    logger.debug(f'score: {score:.5f}')
-
-            logger.info('')
-            logger.debug(f"scores: {', '.join([str(np.round(score, 5)) for score in scores])}, avg: {np.mean(scores):.6f}")
-
-            self._print_trial(trial, np.mean(scores))
-
-            return np.mean(scores)
-
-        def _pack_best_trial(trial):
-            pass
-
-#        train_x = x.copy
-        study = optuna.create_study()
-        study.optimize(_evaluate, n_trials=self.n_trials)
-
-        # compare best_trial vs model from file and save the best one
-        _pack_best_trial(study.best_trial)
-
-        return self
-
-    def transform(self, x, y=None):
-        return x
-
-    def _print_trial(self, trial, score):
-        info = f'trial {trial.number:2.0f}: '
-        info += self._params2str(trial.params)
-        info += f'score: {score:6.5f}'
-
-        is_best = False
-
-        if trial.number > 0:
-            info += f', best: {min(score, trial.study.best_value):6.5f}'
-
-            if score < trial.study.best_value:
-                is_best = True
-        elif trial.number < 0:
-            if score < trial.study_best_value:
-                is_best = True
-
-        logger.info('')
-
-        if is_best:
-            logger.debug(info)
-        else:
-            logger.info(info)
-
-        logger.info('')
-
-    @staticmethod
-    def _create_trial(estimator, number, best_value):
-        trial = optuna.trial.FixedTrial(estimator.get_params())
-        setattr(trial, 'number', number)
-        setattr(trial, 'study_best_value', best_value)
-        return trial
-
-    @staticmethod
-    def _params2str(params):
-        info = ''
-        for key in params:
-            if params[key] is None:
-                info += f'{key}: None, '
-            else:
-                if isinstance(params[key], int):
-                    info += f'{key}: {params[key]:.0f}, '
-                elif isinstance(params[key], str):
-                    info += f'{key}: {params[key]}, '
-                elif isinstance(params[key], bool):
-                    info += f'{key}: {str(params[key])}, '
-                else:
-                    info += f'{key}: {params[key]:.3f}, '
-        return info
-
-    @staticmethod
-    def _get_params(params):
-        _params = dict(params)
-        return _params
 
 
 class FeatureSelector(BaseEstimator, TransformerMixin):
