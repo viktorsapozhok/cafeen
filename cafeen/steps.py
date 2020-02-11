@@ -8,7 +8,6 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 
 import eli5
 from eli5.sklearn import PermutationImportance
-import lightgbm as lgb
 import numpy as np
 import optuna
 import pandas as pd
@@ -86,7 +85,7 @@ class Encoder(BaseEstimator, TransformerMixin):
 
         na_value = self.get_na_value(x)
 
-        _x = utils.target_encoding(_x, self.nominal_features)
+        _x = self.target_encoding(_x, self.nominal_features, na_value=na_value)
 
         ordinal_features = [f for f in features
                             if f in self.ordinal_features and f not in self.cardinal_features]
@@ -97,14 +96,14 @@ class Encoder(BaseEstimator, TransformerMixin):
             n_groups = self.cardinal_encoding[feature]['n_groups']
             min_group_size = self.cardinal_encoding[feature]['min_group_size']
 
-            _x = utils.target_encoding_cv(_x, [feature], cv=cv, verbose=self.verbose)
+            _x = self.target_encoding_cv(_x, [feature], cv, na_value=na_value)
 
             if n_groups > 0:
-                _x = utils.group_features(
+                _x = self.group_features(
                     _x, [feature],
                     n_groups=n_groups,
                     min_group_size=min_group_size)
-                _x = utils.target_encoding(_x, [feature])
+                _x = self.target_encoding(_x, [feature], na_value=na_value)
 
         if self.verbose:
             logger.info(f'na_value: {na_value:.5f}')
@@ -193,11 +192,7 @@ class Encoder(BaseEstimator, TransformerMixin):
     @staticmethod
     def get_features(features):
         return [feature for feature in features
-                if feature not in ['id', 'target'] +
-                ['nom_5', 'nom_6', 'nom_7', 'nom_8', 'nom_9',
-                 'nom_0', 'nom_1', 'nom_2', 'nom_3', 'nom_4',
-                 'ord_0', 'ord_1', 'ord_2', 'ord_3', 'ord_4', 'ord_5',
-                 'bin_3', 'day', 'month', 'bin_1']]
+                if feature not in ['id', 'target', 'bin_3']]
 
     @staticmethod
     def encode_ordinal(x, features, na_value):
@@ -232,6 +227,82 @@ class Encoder(BaseEstimator, TransformerMixin):
 
         return x
 
+    @staticmethod
+    def target_encoding(x, features, na_value=None):
+        mask = x['target'] > -1
+
+        for feature in features:
+            x.loc[x[feature].isna(), feature] = '-1'
+            target_mean = x[mask].groupby(feature)['target'].mean()
+
+            if na_value is not None:
+                target_mean['-1'] = na_value
+
+            x[feature] = x[feature].map(target_mean.to_dict())
+
+        return x
+
+    def target_encoding_cv(self, x, features, cv, n_rounds=1, na_value=None):
+        train, test = utils.split_data(x)
+        del x
+
+        train.sort_index(inplace=True)
+        encoded = []
+
+        for _iter in range(n_rounds):
+            if self.verbose:
+                logger.debug(f'iteration {_iter + 1}')
+
+            _encoded = pd.DataFrame()
+
+            for fold, (train_index, valid_index) in enumerate(
+                    cv.split(train[features], train['target'])):
+                if self.verbose:
+                    logger.info(f'target encoding on fold {fold + 1}')
+
+                encoder = TargetEncoder(na_value=na_value)
+
+                encoder.fit(train.iloc[train_index][features],
+                            train.iloc[train_index]['target'])
+
+                _encoded = _encoded.append(
+                    encoder.transform(train.iloc[valid_index][features]),
+                    ignore_index=False)
+
+            encoded += [_encoded.sort_index()]
+
+        encoder = TargetEncoder(na_value=na_value)
+        encoder.fit(train[features], train['target'])
+
+        _test = test.copy()
+        _test[features] = encoder.transform(test[features].copy())
+
+        _train = train.copy()
+        _train[features] = pd.concat(encoded).groupby(level=0).mean()
+
+        df = pd.concat([_train[test.columns], _test])
+
+        return df
+
+    @staticmethod
+    def group_features(x, features, n_groups, min_group_size=500):
+        for feature in features:
+            if min_group_size is not None:
+                groups = x.groupby(feature)['target'].count()
+                group_index = list(groups[groups >= min_group_size].index)
+                grouped = ~x[feature].isin(group_index)
+
+                x.loc[grouped, feature] = pd.qcut(
+                    x.loc[grouped, feature],
+                    n_groups,
+                    labels=False,
+                    duplicates='drop')
+            else:
+                x[feature] = pd.qcut(
+                    x[feature], n_groups, labels=False, duplicates='drop')
+
+        return x
+
 
 class BayesSearch(BaseEstimator, TransformerMixin):
     def __init__(self, n_trials=10, verbose=True):
@@ -243,7 +314,7 @@ class BayesSearch(BaseEstimator, TransformerMixin):
             ordinal_features = []
 
             for i in range(6):
-                as_ordinal = trial.suggest_categorical('ord_' + str(i), [False, True])
+                as_ordinal = trial.suggest_categorical('ord_' + str(i), [False, False])
                 if as_ordinal:
                     ordinal_features += ['ord_' + str(i)]
 
@@ -277,8 +348,6 @@ class BayesSearch(BaseEstimator, TransformerMixin):
                 cardinal_encoding[feature]['min_group_size'] = \
                     trial.suggest_categorical('size_' + str(fid), group_size[feature])
 
-            cardinal_encoding = {}
-
             min_cat_size = [70, 80, 90, 100, 120, 150]
             correct_features = {
                 'ord_4': True, #trial.suggest_categorical('corr_ord_4', [False, True]),
@@ -290,7 +359,7 @@ class BayesSearch(BaseEstimator, TransformerMixin):
                 ordinal_features=ordinal_features,
                 cardinal_encoding=cardinal_encoding,
                 handle_missing=True,
-                min_category_size=trial.suggest_categorical('min_cat_size', min_cat_size),
+                min_category_size=0, #trial.suggest_categorical('min_cat_size', min_cat_size),
                 log_alpha=0,
                 one_hot_encoding=True,
                 correct_features=correct_features,
@@ -307,7 +376,6 @@ class BayesSearch(BaseEstimator, TransformerMixin):
                 verbose=0)
 
             scores = []
-            _x = x.copy()
 
             for fold in range(3):
                 if self.verbose:
@@ -316,11 +384,11 @@ class BayesSearch(BaseEstimator, TransformerMixin):
                     logger.info('')
 
                 train, valid, _, _ = train_test_split(
-                    _x, _x['target'],
+                    x, x['target'],
                     test_size=0.5,
                     shuffle=True,
                     random_state=fold,
-                    stratify=_x['target'])
+                    stratify=x['target'])
 
                 _valid = valid.copy()
                 _valid['target'] = -1

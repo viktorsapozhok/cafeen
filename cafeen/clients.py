@@ -18,10 +18,10 @@ logger = logging.getLogger('cafeen')
 def submit_1(**kwargs):
     nrows = kwargs.get('nrows', None)
 
-    ordinal_features = ['ord_1', 'ord_5', 'nom_6']
-    splits = [3, 6, 3, 6, 7]
-    groups = [23, 19, 13, 24, 23]
-    group_size = [None, 900, 8000, None, None]
+    ordinal_features = ['ord_4', 'ord_5', 'nom_6']
+    splits = [5, 5, 5, 5, 5]
+    groups = [10, 19, 19, 23, 13]
+    group_size = [None, None, None, 8000, None]
 
     cardinal_encoding = dict()
 
@@ -59,7 +59,7 @@ def submit_1(**kwargs):
 
     estimator = LogisticRegression(
         random_state=2020,
-        C=0.495,
+        C=0.237,
         class_weight='balanced',
         solver='liblinear',
         max_iter=2020,
