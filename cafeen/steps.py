@@ -2,6 +2,7 @@ from datetime import datetime
 import gc
 import logging
 from os import path
+import random
 import warnings
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
@@ -14,9 +15,11 @@ import pandas as pd
 from scipy import sparse
 from sklearn.base import (
     BaseEstimator,
+    ClassifierMixin,
     TransformerMixin
 )
 from sklearn.linear_model import LogisticRegression
+from sklearn.naive_bayes import BernoulliNB
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
 from sklearn.preprocessing import OneHotEncoder
@@ -66,6 +69,8 @@ class Encoder(BaseEstimator, TransformerMixin):
 
     def transform(self, x):
         _x = x.copy()
+#        _x = self.augment_train(_x)
+        na_value = self.get_na_value(x)
 
         features = self.get_features(_x.columns)
 
@@ -83,13 +88,11 @@ class Encoder(BaseEstimator, TransformerMixin):
         if self.correct_features['day']:
             _x = self.correct_day(_x)
 
-        na_value = self.get_na_value(x)
-
-        _x = self.target_encoding(_x, self.nominal_features, na_value=na_value)
+#        _x = self.target_encoding(_x, self.nominal_features, na_value=na_value)
 
         ordinal_features = [f for f in features
                             if f in self.ordinal_features and f not in self.cardinal_features]
-        _x = self.encode_ordinal(_x, ordinal_features, na_value)
+#        _x = self.encode_ordinal(_x, ordinal_features, na_value)
 
         for feature in self.cardinal_features:
             cv = self.cardinal_encoding[feature]['cv']
@@ -103,24 +106,26 @@ class Encoder(BaseEstimator, TransformerMixin):
                     _x, [feature],
                     n_groups=n_groups,
                     min_group_size=min_group_size)
-                _x = self.target_encoding(_x, [feature], na_value=na_value)
+#                _x = self.target_encoding(_x, [feature], na_value=na_value)
 
         if self.verbose:
             logger.info(f'na_value: {na_value:.5f}')
+            logger.info('')
+
+            for feature in features:
+                try:
+                    logger.info(
+                        f'{feature}: {_x[feature].min():.4f} - {_x[feature].max():.4f}')
+                except TypeError:
+                    continue
 
         for feature in features:
             if self.handle_missing:
-                if feature not in self.ordinal_features:
-                    _x.loc[x[feature].isna(), feature] = na_value
-            _x.loc[_x[feature].isna(), feature] = na_value
-
-        if self.verbose:
-            logger.info('')
-
-        for feature in features:
-            if self.verbose:
-                logger.info(
-                    f'{feature}: {_x[feature].min():.4f} - {_x[feature].max():.4f}')
+                _x.loc[x[feature].isna(), feature] = -1
+#                if feature not in self.ordinal_features:
+#                    _x.loc[x[feature].isna(), feature] = na_value
+#            _x.loc[_x[feature].isna(), feature] = na_value
+            _x.loc[_x[feature].isna(), feature] = -1
 
             if self.log_alpha > 0:
                 _x[feature] = np.log(self.log_alpha + _x[feature])
@@ -134,10 +139,15 @@ class Encoder(BaseEstimator, TransformerMixin):
         assert _x[features].isnull().sum().sum() == 0
 
         _train, _test = utils.split_data(_x)
-        _train_y = _train['target'].values
-        _train_x = _train[features].values
-        _test_x = _test[features].values
-        _test_id = _test['id'].values
+#        _train_y = _train['target'].values
+#        _train_x = _train[features].values
+#        _test_x = _test[features].values
+#        _test_id = _test['id'].values
+
+        _train_y = _train['target']
+        _train_x = _train[features]
+        _test_x = _test[features]
+        _test_id = _test['id']
 
         if self.one_hot_encoding:
             ohe_features = [f for f in features if f not in self.ordinal_features] + \
@@ -161,9 +171,44 @@ class Encoder(BaseEstimator, TransformerMixin):
 
         return _train_x, _train_y, _test_x, _test_id
 
+    def augment_train(self, x):
+        features = self.get_features(x.columns)
+
+        train, test = utils.split_data(x)
+        fair_count = self.get_fair_na_count(len(train))
+
+        if self.verbose:
+            n_obs = (train[features].isna().sum() - fair_count).abs().sum()
+            logger.info(f'conflicts before: {n_obs}')
+
+        for feature in features:
+            na_count = train[feature].isna().sum()
+
+            index = random.sample(
+                list(train[train[feature].isna()].index),
+                int(np.abs(na_count - fair_count)))
+
+            if na_count > fair_count:
+                train = train.drop(index).reset_index(drop=True)
+            elif na_count < fair_count:
+                train = train.append(train.iloc[index]).reset_index(drop=True)
+
+        if self.verbose:
+            na_counts = train[features].isna().sum()
+            n_obs = (na_counts - fair_count).abs().sum()
+            logger.info(f'conflicts after: {n_obs}')
+
+        x = pd.concat([train, test])
+
+        return x
+
     @staticmethod
     def get_na_value(x):
         return x[x['target'] > -1]['target'].mean()
+
+    @staticmethod
+    def get_fair_na_count(n_obs):
+        return 0.03 * n_obs
 
     @staticmethod
     def correct_day(x):
@@ -192,7 +237,7 @@ class Encoder(BaseEstimator, TransformerMixin):
     @staticmethod
     def get_features(features):
         return [feature for feature in features
-                if feature not in ['id', 'target', 'bin_3']]
+                if feature not in ['id', 'target']]
 
     @staticmethod
     def encode_ordinal(x, features, na_value):
@@ -280,9 +325,9 @@ class Encoder(BaseEstimator, TransformerMixin):
         _train = train.copy()
         _train[features] = pd.concat(encoded).groupby(level=0).mean()
 
-        df = pd.concat([_train[test.columns], _test])
+        x = pd.concat([_train[test.columns], _test])
 
-        return df
+        return x
 
     @staticmethod
     def group_features(x, features, n_groups, min_group_size=500):
@@ -343,12 +388,10 @@ class BayesSearch(BaseEstimator, TransformerMixin):
 #                    n_splits=trial.suggest_categorical('cv_' + str(fid), n_splits),
                     shuffle=True,
                     random_state=2020)
-                cardinal_encoding[feature]['n_groups'] = \
-                    trial.suggest_categorical('groups_' + str(fid), n_groups)
-                cardinal_encoding[feature]['min_group_size'] = \
-                    trial.suggest_categorical('size_' + str(fid), group_size[feature])
+                cardinal_encoding[feature]['n_groups'] = trial.suggest_categorical('groups_' + str(fid), n_groups)
+                cardinal_encoding[feature]['min_group_size'] = trial.suggest_categorical('size_' + str(fid), group_size[feature])
 
-            min_cat_size = [70, 80, 90, 100, 120, 150]
+            min_cat_size = [0, 5, 10, 20, 30, 40, 50, 70]
             correct_features = {
                 'ord_4': True, #trial.suggest_categorical('corr_ord_4', [False, True]),
                 'ord_5': False, #trial.suggest_categorical('corr_ord_5', [False, True]),
@@ -359,21 +402,23 @@ class BayesSearch(BaseEstimator, TransformerMixin):
                 ordinal_features=ordinal_features,
                 cardinal_encoding=cardinal_encoding,
                 handle_missing=True,
-                min_category_size=0, #trial.suggest_categorical('min_cat_size', min_cat_size),
+                min_category_size=trial.suggest_categorical('min_cat_size', min_cat_size),
                 log_alpha=0,
-                one_hot_encoding=True,
+                one_hot_encoding=False,
                 correct_features=correct_features,
                 verbose=self.verbose)
 
-            estimator = LogisticRegression(
-                random_state=2020,
-                C=trial.suggest_uniform('C', 0.1, 0.5),
-                class_weight='balanced',
-                solver='liblinear',
-                max_iter=2020,
-                fit_intercept=True,
-                penalty='l2',
-                verbose=0)
+#            estimator = LogisticRegression(
+#                random_state=2020,
+#                C=trial.suggest_uniform('C', 0.1, 0.5),
+#                class_weight='balanced',
+#                solver='liblinear',
+#                max_iter=2020,
+#                fit_intercept=True,
+#                penalty='l2',
+#                verbose=0)
+
+            estimator = NaiveBayes(na_value=-1)
 
             scores = []
 
@@ -398,7 +443,8 @@ class BayesSearch(BaseEstimator, TransformerMixin):
                 _train_x, _train_y, _test_x, _test_id = encoder.fit_transform(train)
 
                 predicted = pd.DataFrame()
-                predicted['id'] = _test_id
+#                predicted['id'] = _test_id
+                predicted['id'] = _test_id.values
                 predicted['y_pred'] = estimator.fit(_train_x, _train_y).predict_proba(_test_x)[:, 1]
                 del _train_x, _test_x, _train_y, _test_id
 
@@ -486,6 +532,62 @@ class BayesSearch(BaseEstimator, TransformerMixin):
     def _get_params(params):
         _params = dict(params)
         return _params
+
+
+class NaiveBayes(BaseEstimator, ClassifierMixin):
+    def __init__(self, na_value=-1):
+        self.na_value = na_value
+        self.class_count_ = np.zeros(2)
+        self.class_prior_ = np.zeros(2)
+        self.posterior_ = dict()
+
+    def fit(self, x, y=None):
+        self.class_count_[0] = (y == 0).sum()
+        self.class_count_[1] = (y == 1).sum()
+        self.class_prior_ = self.class_count_ / np.sum(self.class_count_)
+
+        for i, feature in enumerate(x.columns):
+            counts_0 = x[y == 0].groupby(feature).size()
+            counts_1 = x[y == 1].groupby(feature).size()
+
+            for index, value in counts_0.iteritems():
+                if index == self.na_value:
+                    self.posterior_[i, index, 0] = self.na_prob()
+                else:
+                    self.posterior_[i, index, 0] = value / self.class_count_[0]
+
+            for index, value in counts_1.iteritems():
+                if index == self.na_value:
+                    self.posterior_[i, index, 1] = self.na_prob()
+                else:
+                    self.posterior_[i, index, 1] = value / self.class_count_[1]
+
+        return self
+
+    def predict_proba(self, x):
+        y = np.zeros((len(x), 2))
+
+        for i, features in enumerate(x.values):
+            for k in range(2):
+                p = 1
+
+                for j, val in enumerate(features):
+                    try:
+                        p *= self.posterior_[j, val, k]
+                    except KeyError:
+                        p *= self.posterior_[j, self.na_value, k]
+
+                y[i, k] = self.class_prior_[k] * p
+
+            y_sum = y[i, 0] + y[i, 1]
+            y[i, 0] /= y_sum
+            y[i, 1] /= y_sum
+
+        return y
+
+    @staticmethod
+    def na_prob():
+        return 0.03
 
 
 class OneColClassifier(BaseEstimator):
