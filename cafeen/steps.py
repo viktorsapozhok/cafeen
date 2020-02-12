@@ -81,12 +81,12 @@ class Encoder(BaseEstimator, TransformerMixin):
         _x['ord_5'] = x['ord_5'].str[0]
         _x.loc[x['ord_5'].isna(), 'ord_5'] = np.nan
 
-        if self.correct_features['ord_4']:
-            _x = self.correct_ord_4(_x)
-        if self.correct_features['ord_5']:
-            _x = self.correct_ord_5(_x)
-        if self.correct_features['day']:
-            _x = self.correct_day(_x)
+#        if self.correct_features['ord_4']:
+#            _x = self.correct_ord_4(_x)
+#        if self.correct_features['ord_5']:
+#            _x = self.correct_ord_5(_x)
+#        if self.correct_features['day']:
+#            _x = self.correct_day(_x)
 
 #        _x = self.target_encoding(_x, self.nominal_features, na_value=na_value)
 
@@ -418,7 +418,7 @@ class BayesSearch(BaseEstimator, TransformerMixin):
 #                penalty='l2',
 #                verbose=0)
 
-            estimator = NaiveBayes(na_value=-1)
+            estimator = NaiveBayes(na_value=-1, correct_features=['ord_3'])
 
             scores = []
 
@@ -535,8 +535,14 @@ class BayesSearch(BaseEstimator, TransformerMixin):
 
 
 class NaiveBayes(BaseEstimator, ClassifierMixin):
-    def __init__(self, na_value=-1):
+    def __init__(self, na_value=-1, correct_features=None):
         self.na_value = na_value
+
+        if correct_features is None:
+            self.correct_features = []
+        else:
+            self.correct_features = correct_features
+
         self.class_count_ = np.zeros(2)
         self.class_prior_ = np.zeros(2)
         self.posterior_ = dict()
@@ -546,21 +552,34 @@ class NaiveBayes(BaseEstimator, ClassifierMixin):
         self.class_count_[1] = (y == 1).sum()
         self.class_prior_ = self.class_count_ / np.sum(self.class_count_)
 
-        for i, feature in enumerate(x.columns):
+        for fid, feature in enumerate(x.columns):
             counts_0 = x[y == 0].groupby(feature).size()
             counts_1 = x[y == 1].groupby(feature).size()
 
-            for index, value in counts_0.iteritems():
-                if index == self.na_value:
-                    self.posterior_[i, index, 0] = self.na_prob()
+            for category, category_count in counts_0.iteritems():
+                if category == self.na_value:
+                    self.posterior_[fid, category, 0] = self.na_prob()
                 else:
-                    self.posterior_[i, index, 0] = value / self.class_count_[0]
+                    self.posterior_[fid, category, 0] = category_count / self.class_count_[0]
 
-            for index, value in counts_1.iteritems():
-                if index == self.na_value:
-                    self.posterior_[i, index, 1] = self.na_prob()
+            for category, category_count in counts_1.iteritems():
+                if category == self.na_value:
+                    self.posterior_[fid, category, 1] = self.na_prob()
                 else:
-                    self.posterior_[i, index, 1] = value / self.class_count_[1]
+                    self.posterior_[fid, category, 1] = category_count / self.class_count_[1]
+
+        if 'ord_3' in self.correct_features:
+            fid = x.columns.get_loc('ord_3')
+            counts = x.groupby('ord_3').size()
+
+            self.posterior_[fid, 'g', 0] = self.mid_prob(
+                counts['g'], counts['f'], counts['h'], self.posterior_[fid, 'f', 0], self.posterior_[fid, 'h', 0])
+            self.posterior_[fid, 'g', 1] = self.mid_prob(
+                counts['g'], counts['f'], counts['h'], self.posterior_[fid, 'f', 1], self.posterior_[fid, 'h', 1])
+            self.posterior_[fid, 'j', 0] = self.mid_prob(
+                counts['i'], counts['k'], counts['h'], self.posterior_[fid, 'i', 0], self.posterior_[fid, 'k', 0])
+            self.posterior_[fid, 'j', 1] = self.mid_prob(
+                counts['i'], counts['k'], counts['h'], self.posterior_[fid, 'i', 1], self.posterior_[fid, 'k', 1])
 
         return self
 
@@ -588,6 +607,10 @@ class NaiveBayes(BaseEstimator, ClassifierMixin):
     @staticmethod
     def na_prob():
         return 0.03
+
+    @staticmethod
+    def mid_prob(p_mid, p_1, p_2, p_1_y, p_2_y):
+        return 0.5 * p_mid * ((p_1_y / p_1) + (p_2_y / p_2))
 
 
 class OneColClassifier(BaseEstimator):
