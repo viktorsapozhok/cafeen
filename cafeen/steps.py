@@ -19,7 +19,6 @@ from sklearn.base import (
     TransformerMixin
 )
 from sklearn.linear_model import LogisticRegression
-from sklearn.naive_bayes import BernoulliNB
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
 from sklearn.preprocessing import OneHotEncoder
@@ -36,7 +35,6 @@ class Encoder(BaseEstimator, TransformerMixin):
             ordinal_features=None,
             cardinal_encoding=None,
             handle_missing=True,
-            min_category_size=17,
             log_alpha=0.1,
             one_hot_encoding=True,
             correct_features=None,
@@ -44,7 +42,6 @@ class Encoder(BaseEstimator, TransformerMixin):
     ):
         self.cardinal_encoding = cardinal_encoding
         self.handle_missing = handle_missing
-        self.min_category_size = min_category_size
         self.correct_features = correct_features
         self.log_alpha = log_alpha
         self.one_hot_encoding = one_hot_encoding
@@ -71,12 +68,7 @@ class Encoder(BaseEstimator, TransformerMixin):
         _x = x.copy()
 #        _x = self.augment_train(_x)
         na_value = self.get_na_value(x)
-
         features = self.get_features(_x.columns)
-
-        if self.min_category_size > 0:
-            _x = utils.mark_as_na(
-                _x, self.cardinal_features, threshold=self.min_category_size, verbose=self.verbose)
 
         _x['ord_5'] = x['ord_5'].str[0]
         _x.loc[x['ord_5'].isna(), 'ord_5'] = np.nan
@@ -94,19 +86,23 @@ class Encoder(BaseEstimator, TransformerMixin):
                             if f in self.ordinal_features and f not in self.cardinal_features]
 #        _x = self.encode_ordinal(_x, ordinal_features, na_value)
 
+#        _x = self.target_encoding(_x, ['ord_5'], na_value=na_value)
+#        _x = self.group_features(_x, ['ord_5'], n_groups=26, min_group_size=None)
+
         for feature in self.cardinal_features:
             cv = self.cardinal_encoding[feature]['cv']
             n_groups = self.cardinal_encoding[feature]['n_groups']
-            min_group_size = self.cardinal_encoding[feature]['min_group_size']
+            min_cat_size = self.cardinal_encoding[feature]['min_cat_size']
+
+            if min_cat_size > 0:
+                _x = utils.mark_as_na(_x, [feature], threshold=min_cat_size, verbose=self.verbose)
 
             _x = self.target_encoding_cv(_x, [feature], cv, na_value=na_value)
 
             if n_groups > 0:
-                _x = self.group_features(
-                    _x, [feature],
-                    n_groups=n_groups,
-                    min_group_size=min_group_size)
-#                _x = self.target_encoding(_x, [feature], na_value=na_value)
+                _x = self.group_features(_x, [feature], n_groups=n_groups)
+
+        _x = self.target_encoding(_x, self.cardinal_features, na_value=na_value)
 
         if self.verbose:
             logger.info(f'na_value: {na_value:.5f}')
@@ -116,7 +112,7 @@ class Encoder(BaseEstimator, TransformerMixin):
                 try:
                     logger.info(
                         f'{feature}: {_x[feature].min():.4f} - {_x[feature].max():.4f}')
-                except TypeError:
+                except (TypeError, ValueError):
                     continue
 
         for feature in features:
@@ -330,7 +326,7 @@ class Encoder(BaseEstimator, TransformerMixin):
         return x
 
     @staticmethod
-    def group_features(x, features, n_groups, min_group_size=500):
+    def group_features(x, features, n_groups, min_group_size=None):
         for feature in features:
             if min_group_size is not None:
                 groups = x.groupby(feature)['target'].count()
@@ -358,40 +354,40 @@ class BayesSearch(BaseEstimator, TransformerMixin):
         def _evaluate(trial):
             ordinal_features = []
 
-            for i in range(6):
-                as_ordinal = trial.suggest_categorical('ord_' + str(i), [False, False])
-                if as_ordinal:
-                    ordinal_features += ['ord_' + str(i)]
+#            for i in range(6):
+#                as_ordinal = trial.suggest_categorical('ord_' + str(i), [False, False])
+#                if as_ordinal:
+#                    ordinal_features += ['ord_' + str(i)]
 
-            for i in range(5, 10):
-                as_ordinal = trial.suggest_categorical('nom_' + str(i), [False, False])
-                if as_ordinal:
-                    ordinal_features += ['nom_' + str(i)]
+#            for i in range(5, 10):
+#                as_ordinal = trial.suggest_categorical('nom_' + str(i), [False, False])
+#                if as_ordinal:
+#                    ordinal_features += ['nom_' + str(i)]
 
-            n_groups = [10, 13, 15, 19, 20, 23, 25, 30]
-            n_splits = [3, 4, 5, 6, 7, 8]
-            group_size = {
-                'nom_5': [None, 1000, 1500],
-                'nom_6': [None, 900, 1200],
-                'nom_7': [None, 4000, 8000],
-                'nom_8': [None, 4000, 8000],
-                'nom_9': [None, 500, 840],
+            n_groups = [10, 40]
+            n_splits = [3, 4, 5]
+            min_cat_size = {
+                'nom_5': [115, 125],
+                'nom_6': [90, 110],
+                'nom_7': [0, 5, 10, 20, 50, 100],
+                'nom_8': [0, 5, 10, 20, 50, 100],
+                'nom_9': [80, 100],
             }
 
             cardinal_encoding = dict()
 
-            for feature in ['nom_5', 'nom_6', 'nom_7', 'nom_8', 'nom_9']:
+            for feature in ['nom_5', 'nom_6', 'nom_9']:
                 fid = feature[-1]
                 cardinal_encoding[feature] = dict()
                 cardinal_encoding[feature]['cv'] = StratifiedKFold(
-                    n_splits=5,
-#                    n_splits=trial.suggest_categorical('cv_' + str(fid), n_splits),
+                    n_splits=3, #trial.suggest_categorical('cv_' + str(fid), n_splits),
                     shuffle=True,
                     random_state=2020)
-                cardinal_encoding[feature]['n_groups'] = trial.suggest_categorical('groups_' + str(fid), n_groups)
-                cardinal_encoding[feature]['min_group_size'] = trial.suggest_categorical('size_' + str(fid), group_size[feature])
+                cardinal_encoding[feature]['n_groups'] = \
+                    trial.suggest_int('groups_' + str(fid), n_groups[0], n_groups[1])
+                cardinal_encoding[feature]['min_cat_size'] = \
+                    trial.suggest_int('cat_size_' + str(fid), min_cat_size[feature][0], min_cat_size[feature][1])
 
-            min_cat_size = [0, 5, 10, 20, 30, 40, 50, 70]
             correct_features = {
                 'ord_4': True, #trial.suggest_categorical('corr_ord_4', [False, True]),
                 'ord_5': False, #trial.suggest_categorical('corr_ord_5', [False, True]),
@@ -402,7 +398,6 @@ class BayesSearch(BaseEstimator, TransformerMixin):
                 ordinal_features=ordinal_features,
                 cardinal_encoding=cardinal_encoding,
                 handle_missing=True,
-                min_category_size=trial.suggest_categorical('min_cat_size', min_cat_size),
                 log_alpha=0,
                 one_hot_encoding=False,
                 correct_features=correct_features,
@@ -418,11 +413,11 @@ class BayesSearch(BaseEstimator, TransformerMixin):
 #                penalty='l2',
 #                verbose=0)
 
-            estimator = NaiveBayes(na_value=-1, correct_features=['ord_3'])
+            estimator = NaiveBayes(na_value=-1, correct_features=['ord_3', 'ord_4', 'month', 'ord_0'])
 
             scores = []
 
-            for fold in range(3):
+            for fold in range(1):
                 if self.verbose:
                     logger.info('')
                     logger.debug(f'fold {fold} started')
@@ -572,14 +567,41 @@ class NaiveBayes(BaseEstimator, ClassifierMixin):
             fid = x.columns.get_loc('ord_3')
             counts = x.groupby('ord_3').size()
 
-            self.posterior_[fid, 'g', 0] = self.mid_prob(
-                counts['g'], counts['f'], counts['h'], self.posterior_[fid, 'f', 0], self.posterior_[fid, 'h', 0])
-            self.posterior_[fid, 'g', 1] = self.mid_prob(
-                counts['g'], counts['f'], counts['h'], self.posterior_[fid, 'f', 1], self.posterior_[fid, 'h', 1])
-            self.posterior_[fid, 'j', 0] = self.mid_prob(
-                counts['i'], counts['k'], counts['h'], self.posterior_[fid, 'i', 0], self.posterior_[fid, 'k', 0])
-            self.posterior_[fid, 'j', 1] = self.mid_prob(
-                counts['i'], counts['k'], counts['h'], self.posterior_[fid, 'i', 1], self.posterior_[fid, 'k', 1])
+            for class_ in range(2):
+                self.posterior_[fid, 'g', class_] = self.mid_prob(
+                    counts['g'], counts['f'], counts['h'], self.posterior_[fid, 'f', class_], self.posterior_[fid, 'h', class_])
+                self.posterior_[fid, 'j', class_] = self.mid_prob(
+                    counts['j'], counts['i'], counts['k'], self.posterior_[fid, 'i', class_], self.posterior_[fid, 'k', class_])
+
+        if 'ord_4' in self.correct_features:
+            fid = x.columns.get_loc('ord_4')
+            counts = x.groupby('ord_4').size()
+
+            for class_ in range(2):
+                self.posterior_[fid, 'G', class_] = self.mid_prob(
+                    counts['G'], counts['F'], counts['H'], self.posterior_[fid, 'F', class_], self.posterior_[fid, 'H', class_])
+                self.posterior_[fid, 'J', class_] = self.mid_prob(
+                    counts['J'], counts['I'], counts['K'], self.posterior_[fid, 'I', class_], self.posterior_[fid, 'K', class_])
+                self.posterior_[fid, 'L', class_] = self.mid_prob(
+                    counts['L'], counts['K'], counts['M'], self.posterior_[fid, 'K', class_], self.posterior_[fid, 'M', class_])
+                self.posterior_[fid, 'S', class_] = self.mid_prob(
+                    counts['S'], counts['R'], counts['T'], self.posterior_[fid, 'R', class_], self.posterior_[fid, 'T', class_])
+
+        if 'month' in self.correct_features:
+            fid = x.columns.get_loc('month')
+            counts = x.groupby('month').size()
+
+            for class_ in range(2):
+                self.posterior_[fid, 10, class_] = self.mid_prob(
+                    counts[10], counts[9], counts[11], self.posterior_[fid, 9, class_], self.posterior_[fid, 11, class_])
+
+        if 'ord_0' in self.correct_features:
+            fid = x.columns.get_loc('ord_0')
+            counts = x.groupby('ord_0').size()
+
+            for class_ in range(2):
+                self.posterior_[fid, 2, class_] = self.mid_prob(
+                    counts[2], counts[1], counts[3], self.posterior_[fid, 1, class_], self.posterior_[fid, 3, class_])
 
         return self
 
@@ -963,3 +985,4 @@ class TargetEncoder(BaseEstimator, TransformerMixin):
 
             x[feature] = x[feature].map(self.target_mean[feature].to_dict())
         return x
+

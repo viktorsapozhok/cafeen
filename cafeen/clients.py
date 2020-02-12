@@ -18,7 +18,7 @@ logger = logging.getLogger('cafeen')
 def submit_1(**kwargs):
     nrows = kwargs.get('nrows', None)
 
-    ordinal_features = ['ord_4', 'ord_5', 'nom_6']
+    ordinal_features = []
     splits = [5, 5, 5, 5, 5]
     groups = [10, 19, 19, 23, 13]
     group_size = [None, None, None, 8000, None]
@@ -34,11 +34,7 @@ def submit_1(**kwargs):
         cardinal_encoding[feature]['n_groups'] = groups[i]
         cardinal_encoding[feature]['min_group_size'] = group_size[i]
 
-    correct_features = {
-        'ord_4': True,
-        'ord_5': False,
-        'day': True
-    }
+    correct_features = ['ord_0', 'ord_3', 'ord_4', 'month']
 
     df, valid_y = utils.read_data(
         nrows=nrows,
@@ -50,29 +46,29 @@ def submit_1(**kwargs):
         handle_missing=True,
         min_category_size=70,
         log_alpha=0,
-        one_hot_encoding=True,
-        correct_features=correct_features)
+        one_hot_encoding=False,
+        correct_features=[])
 
     train_x, train_y, test_x, test_id = encoder.fit_transform(df)
 
     logger.debug(f'train: {train_x.shape}, test: {test_x.shape}')
 
-    estimator = LogisticRegression(
-        random_state=2020,
-        C=0.237,
-        class_weight='balanced',
-        solver='liblinear',
-        max_iter=2020,
-        fit_intercept=True,
-        penalty='l2',
-        verbose=1)
+#    estimator = LogisticRegression(
+#        random_state=2020,
+#        C=0.237,
+#        class_weight='balanced',
+#        solver='liblinear',
+#        max_iter=2020,
+#        fit_intercept=True,
+#        penalty='l2',
+#        verbose=1)
 
-    clf = steps.Classifier(estimator)
+    estimator = steps.NaiveBayes(na_value=-1, correct_features=correct_features)
 
     if valid_y is None:
-        submitter = steps.Submitter(clf, config.path_to_data)
+        submitter = steps.Submitter(estimator, config.path_to_data)
     else:
-        submitter = steps.Submitter(clf)
+        submitter = steps.Submitter(estimator)
 
     y_pred = submitter.fit(train_x, train_y).predict_proba(test_x, test_id=test_id)
 
