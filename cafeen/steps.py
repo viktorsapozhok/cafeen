@@ -352,16 +352,28 @@ class Encoder(BaseEstimator, TransformerMixin):
     def filter_feature( x, feature, filter_):
         mask = x['target'] > -1
 
-        filtered = []
         stat = x[mask].groupby(feature)['target'].agg(['count', 'mean'])
 
-        filtered += list(stat[(stat['count'] < filter_[0]) & (stat['mean'] < filter_[1])].index)
-        filtered += list(stat[(stat['count'] < filter_[0]) & (stat['mean'] > filter_[2])].index)
+        na_filter = list(stat[stat['count'] < filter_[0]].index)
+        mask = x[feature].isin(na_filter)
+        x.loc[mask, feature] = 'np.nan'
+        n = mask.sum()
 
-        n_na = x[feature].isna().sum()
-        x.loc[x[feature].isin(filtered), feature] = np.nan
+        filtered = list(stat[(stat['count'] >= filter_[0]) &
+                             (stat['count'] < filter_[1]) &
+                             (stat['mean'] < filter_[2])].index)
+        mask = x[feature].isin(filtered)
+        x.loc[mask, feature] = 'low'
+        n += mask.sum()
 
-        logger.info(f"{feature}: {x[feature].isna().sum() - n_na} filtered")
+        filtered = list(stat[(stat['count'] >= filter_[0]) &
+                             (stat['count'] < filter_[1]) &
+                             (stat['mean'] > filter_[2])].index)
+        mask = x[feature].isin(filtered)
+        x.loc[mask, feature] = 'high'
+        n += mask.sum()
+
+        logger.info(f'{feature}: {n} filtered')
 
         return x
 
@@ -384,20 +396,35 @@ class BayesSearch(BaseEstimator, TransformerMixin):
             n_splits = [3, 4, 5]
 
             groups = {
-                'nom_5': [150, 200],
-                'nom_6': [150, 200],
-                'nom_9': [150, 200],
+                'nom_5': [9, 11],
+                'nom_6': [50, 65],
+                'nom_9': [27, 28],
+            }
+
+            filters = {
+                'nom_5': [
+                    trial.suggest_int('nom_5_na_count', 0, 17),
+                    trial.suggest_int('nom_5_min_count', 30, 100),
+                    trial.suggest_uniform('nom_5_min_avg', 0.1, 0.15),
+                    trial.suggest_uniform('nom_5_max_avg', 0.25, 0.3)
+                ],
+                'nom_6': [
+                    trial.suggest_int('nom_6_na_count', 0, 17),
+                    trial.suggest_int('nom_6_min_count', 30, 100),
+                    trial.suggest_uniform('nom_6_min_avg', 0.07, 0.15),
+                    trial.suggest_uniform('nom_6_max_avg', 0.24, 0.3)
+                ],
+                'nom_9': [
+                    trial.suggest_int('nom_9_na_count', 0, 17),
+                    trial.suggest_int('nom_9_min_count', 30, 100),
+                    trial.suggest_uniform('nom_9_min_avg', 0.05, 0.15),
+                    trial.suggest_uniform('nom_9_max_avg', 0.25, 0.32)
+                ]
             }
 
             cardinal_encoding = dict()
 
             for feature in ['nom_5', 'nom_6', 'nom_9']:
-                _filter = [
-                    trial.suggest_int(feature + '_min_count', 0, 200),
-                    trial.suggest_int(feature + '_min_avg', 0, 0.15),
-                    trial.suggest_int(feature + '_max_avg', 0.25, 0.4),
-                ]
-
                 fid = feature[-1]
                 cardinal_encoding[feature] = dict()
                 cardinal_encoding[feature]['cv'] = StratifiedKFold(
@@ -406,13 +433,13 @@ class BayesSearch(BaseEstimator, TransformerMixin):
                     random_state=2020)
                 cardinal_encoding[feature]['n_groups'] = \
                     trial.suggest_int('groups_' + str(fid), groups[feature][0], groups[feature][1])
-                cardinal_encoding[feature]['filter'] = _filter
+                cardinal_encoding[feature]['filter'] = filters[feature]
 
             correct_features = {
                 'ord_4': True,
                 'ord_5': False,
                 'day': True,
-                'nom_7': trial.suggest_categorical('corr_nom_7', [False, True])
+                'nom_7': True
             }
 
             encoder = Encoder(

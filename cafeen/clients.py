@@ -20,7 +20,7 @@ def submit_1(**kwargs):
 
     ordinal_features = ['ord_4', 'ord_5']
     splits = [3, 3, 3]
-    groups = [11, 24, 28]
+    groups = [11, 65, 28]
     min_cat_size = [128, 84, 72]
 
     cardinal_encoding = dict()
