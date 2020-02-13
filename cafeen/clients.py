@@ -6,7 +6,7 @@ import pandas as pd
 from scipy import sparse
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import KFold, StratifiedKFold
-from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
+from sklearn.linear_model import LogisticRegression, RidgeClassifier
 from sklearn.naive_bayes import CategoricalNB, BernoulliNB
 from sklearn.preprocessing import StandardScaler, OrdinalEncoder, MinMaxScaler, OneHotEncoder
 
@@ -18,23 +18,23 @@ logger = logging.getLogger('cafeen')
 def submit_1(**kwargs):
     nrows = kwargs.get('nrows', None)
 
-    ordinal_features = []
-    splits = [5, 5, 5, 5, 5]
-    groups = [10, 19, 19, 23, 13]
-    group_size = [None, None, None, 8000, None]
+    ordinal_features = ['ord_4', 'ord_5']
+    splits = [3, 3, 3]
+    groups = [11, 24, 28]
+    min_cat_size = [128, 84, 72]
 
     cardinal_encoding = dict()
 
-    for i, feature in enumerate(['nom_5', 'nom_6', 'nom_7', 'nom_8', 'nom_9']):
+    for i, feature in enumerate(['nom_5', 'nom_6', 'nom_9']):
         cardinal_encoding[feature] = dict()
         cardinal_encoding[feature]['cv'] = StratifiedKFold(
             n_splits=splits[i],
             shuffle=True,
             random_state=2020)
         cardinal_encoding[feature]['n_groups'] = groups[i]
-        cardinal_encoding[feature]['min_group_size'] = group_size[i]
+        cardinal_encoding[feature]['min_cat_size'] = min_cat_size[i]
 
-    correct_features = ['ord_0', 'ord_3', 'ord_4', 'month']
+    correct_features = {'ord_4': True, 'ord_5': False, 'day': True}
 
     df, valid_y = utils.read_data(
         nrows=nrows,
@@ -44,26 +44,26 @@ def submit_1(**kwargs):
         ordinal_features=ordinal_features,
         cardinal_encoding=cardinal_encoding,
         handle_missing=True,
-        min_category_size=70,
         log_alpha=0,
-        one_hot_encoding=False,
-        correct_features=[])
+        one_hot_encoding=True,
+        correct_features=correct_features,
+        verbose=True)
 
     train_x, train_y, test_x, test_id = encoder.fit_transform(df)
 
     logger.debug(f'train: {train_x.shape}, test: {test_x.shape}')
 
-#    estimator = LogisticRegression(
-#        random_state=2020,
-#        C=0.237,
-#        class_weight='balanced',
-#        solver='liblinear',
-#        max_iter=2020,
-#        fit_intercept=True,
-#        penalty='l2',
-#        verbose=1)
+    estimator = LogisticRegression(
+        random_state=2020,
+        C=0.053,
+        class_weight='balanced',
+        solver='liblinear',
+        max_iter=2020,
+        fit_intercept=True,
+        penalty='l2',
+        verbose=1)
 
-    estimator = steps.NaiveBayes(na_value=-1, correct_features=correct_features)
+    #    estimator = steps.NaiveBayes(na_value=-1, correct_features=correct_features)
 
     if valid_y is None:
         submitter = steps.Submitter(estimator, config.path_to_data)
@@ -176,7 +176,11 @@ def submit_4(**kwargs):
     logger.info('reading train')
     train = pd.read_csv(config.path_to_train, nrows=kwargs.get('nrows', None))
 
-    bs = steps.BayesSearch(n_trials=500, verbose=kwargs.get('verbose'))
+    bs = steps.BayesSearch(
+        n_trials=500,
+        n_folds=kwargs.get('folds'),
+        verbose=kwargs.get('verbose'))
+
     bs.fit(train)
 
 

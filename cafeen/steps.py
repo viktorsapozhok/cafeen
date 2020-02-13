@@ -73,18 +73,20 @@ class Encoder(BaseEstimator, TransformerMixin):
         _x['ord_5'] = x['ord_5'].str[0]
         _x.loc[x['ord_5'].isna(), 'ord_5'] = np.nan
 
-#        if self.correct_features['ord_4']:
-#            _x = self.correct_ord_4(_x)
-#        if self.correct_features['ord_5']:
-#            _x = self.correct_ord_5(_x)
-#        if self.correct_features['day']:
-#            _x = self.correct_day(_x)
+        if self.correct_features['ord_4']:
+            _x = self.correct_ord_4(_x)
+        if self.correct_features['ord_5']:
+            _x = self.correct_ord_5(_x)
+        if self.correct_features['day']:
+            _x = self.correct_day(_x)
+        if self.correct_features['nom_7']:
+            _x = self.correct_nom_7(_x)
 
-#        _x = self.target_encoding(_x, self.nominal_features, na_value=na_value)
+        _x = self.target_encoding(_x, self.nominal_features, na_value=na_value)
 
         ordinal_features = [f for f in features
                             if f in self.ordinal_features and f not in self.cardinal_features]
-#        _x = self.encode_ordinal(_x, ordinal_features, na_value)
+        _x = self.encode_ordinal(_x, ordinal_features, na_value)
 
 #        _x = self.target_encoding(_x, ['ord_5'], na_value=na_value)
 #        _x = self.group_features(_x, ['ord_5'], n_groups=26, min_group_size=None)
@@ -117,9 +119,9 @@ class Encoder(BaseEstimator, TransformerMixin):
 
         for feature in features:
             if self.handle_missing:
-                _x.loc[x[feature].isna(), feature] = -1
-#                if feature not in self.ordinal_features:
-#                    _x.loc[x[feature].isna(), feature] = na_value
+#                _x.loc[x[feature].isna(), feature] = -1
+                if feature not in self.ordinal_features:
+                    _x.loc[x[feature].isna(), feature] = na_value
 #            _x.loc[_x[feature].isna(), feature] = na_value
             _x.loc[_x[feature].isna(), feature] = -1
 
@@ -228,6 +230,11 @@ class Encoder(BaseEstimator, TransformerMixin):
         x.loc[x['ord_5'] == 'Z', 'ord_5'] = 'Y'
         x.loc[x['ord_5'] == 'K', 'ord_5'] = 'L'
         x.loc[x['ord_5'] == 'E', 'ord_5'] = 'D'
+        return x
+
+    @staticmethod
+    def correct_nom_7(x):
+        x.loc[x['nom_7'] == 'b39008216', 'nom_7'] = '230229e51'
         return x
 
     @staticmethod
@@ -346,32 +353,32 @@ class Encoder(BaseEstimator, TransformerMixin):
 
 
 class BayesSearch(BaseEstimator, TransformerMixin):
-    def __init__(self, n_trials=10, verbose=True):
+    def __init__(self, n_trials=10, n_folds=3, verbose=True):
         self.n_trials = n_trials
+        self.n_folds = n_folds
         self.verbose = verbose
 
     def fit(self, x, y=None):
         def _evaluate(trial):
-            ordinal_features = []
-
-#            for i in range(6):
-#                as_ordinal = trial.suggest_categorical('ord_' + str(i), [False, False])
-#                if as_ordinal:
-#                    ordinal_features += ['ord_' + str(i)]
+            ordinal_features = ['ord_4', 'ord_5']
 
 #            for i in range(5, 10):
 #                as_ordinal = trial.suggest_categorical('nom_' + str(i), [False, False])
 #                if as_ordinal:
 #                    ordinal_features += ['nom_' + str(i)]
 
-            n_groups = [10, 40]
             n_splits = [3, 4, 5]
+
+            groups = {
+                'nom_5': [150, 200],
+                'nom_6': [150, 200],
+                'nom_9': [150, 200],
+            }
+
             min_cat_size = {
-                'nom_5': [115, 125],
-                'nom_6': [90, 110],
-                'nom_7': [0, 5, 10, 20, 50, 100],
-                'nom_8': [0, 5, 10, 20, 50, 100],
-                'nom_9': [80, 100],
+                'nom_5': [100, 400],
+                'nom_6': [100, 400],
+                'nom_9': [50, 300],
             }
 
             cardinal_encoding = dict()
@@ -384,14 +391,15 @@ class BayesSearch(BaseEstimator, TransformerMixin):
                     shuffle=True,
                     random_state=2020)
                 cardinal_encoding[feature]['n_groups'] = \
-                    trial.suggest_int('groups_' + str(fid), n_groups[0], n_groups[1])
+                    trial.suggest_int('groups_' + str(fid), groups[feature][0], groups[feature][1])
                 cardinal_encoding[feature]['min_cat_size'] = \
                     trial.suggest_int('cat_size_' + str(fid), min_cat_size[feature][0], min_cat_size[feature][1])
 
             correct_features = {
-                'ord_4': True, #trial.suggest_categorical('corr_ord_4', [False, True]),
-                'ord_5': False, #trial.suggest_categorical('corr_ord_5', [False, True]),
-                'day': True, #trial.suggest_categorical('corr_day', [False, True])
+                'ord_4': True,
+                'ord_5': False,
+                'day': True,
+                'nom_7': trial.suggest_categorical('corr_nom_7', [False, True])
             }
 
             encoder = Encoder(
@@ -399,25 +407,25 @@ class BayesSearch(BaseEstimator, TransformerMixin):
                 cardinal_encoding=cardinal_encoding,
                 handle_missing=True,
                 log_alpha=0,
-                one_hot_encoding=False,
+                one_hot_encoding=True,
                 correct_features=correct_features,
                 verbose=self.verbose)
 
-#            estimator = LogisticRegression(
-#                random_state=2020,
-#                C=trial.suggest_uniform('C', 0.1, 0.5),
-#                class_weight='balanced',
-#                solver='liblinear',
-#                max_iter=2020,
-#                fit_intercept=True,
-#                penalty='l2',
-#                verbose=0)
+            estimator = LogisticRegression(
+                random_state=2020,
+                C=trial.suggest_uniform('C', 0.052, 0.054),
+                class_weight='balanced',
+                solver='liblinear',
+                max_iter=2020,
+                fit_intercept=True,
+                penalty='l2',
+                verbose=0)
 
-            estimator = NaiveBayes(na_value=-1, correct_features=['ord_3', 'ord_4', 'month', 'ord_0'])
+#            estimator = NaiveBayes(na_value=-1, correct_features=['ord_3', 'ord_4', 'month', 'ord_0'])
 
             scores = []
 
-            for fold in range(1):
+            for fold in range(self.n_folds):
                 if self.verbose:
                     logger.info('')
                     logger.debug(f'fold {fold} started')
