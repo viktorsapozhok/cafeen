@@ -155,9 +155,9 @@ class Encoder(BaseEstimator, TransformerMixin):
             gc.collect()
 
             _train_x = encoder.transform(_train[ohe_features])
-            _train_x = sparse.hstack((_train_x, _train[ordinal_features].values))
+            _train_x = sparse.hstack((_train_x, _train[ordinal_features].values)).tocsr()
             _test_x = encoder.transform(_test[ohe_features])
-            _test_x = sparse.hstack((_test_x, _test[ordinal_features].values))
+            _test_x = sparse.hstack((_test_x, _test[ordinal_features].values)).tocsr()
 
         if self.verbose:
             logger.info('')
@@ -357,23 +357,23 @@ class Encoder(BaseEstimator, TransformerMixin):
         na_filter = list(stat[stat['count'] < filter_[0]].index)
         mask = x[feature].isin(na_filter)
         x.loc[mask, feature] = 'np.nan'
-        n = mask.sum()
+        n_na = mask.sum()
 
         filtered = list(stat[(stat['count'] >= filter_[0]) &
                              (stat['count'] < filter_[1]) &
                              (stat['mean'] < filter_[2])].index)
         mask = x[feature].isin(filtered)
         x.loc[mask, feature] = 'low'
-        n += mask.sum()
+        n_low = mask.sum()
 
         filtered = list(stat[(stat['count'] >= filter_[0]) &
                              (stat['count'] < filter_[1]) &
                              (stat['mean'] > filter_[2])].index)
         mask = x[feature].isin(filtered)
         x.loc[mask, feature] = 'high'
-        n += mask.sum()
+        n_high = mask.sum()
 
-        logger.info(f'{feature}: {n} filtered')
+        logger.info(f'{feature}: {n_na} na, {n_low} low, {n_high} high')
 
         return x
 
@@ -396,29 +396,29 @@ class BayesSearch(BaseEstimator, TransformerMixin):
             n_splits = [3, 4, 5]
 
             groups = {
-                'nom_5': [9, 11],
-                'nom_6': [50, 65],
+                'nom_5': [11, 12],
+                'nom_6': [50, 51],
                 'nom_9': [27, 28],
             }
 
             filters = {
                 'nom_5': [
-                    trial.suggest_int('nom_5_na_count', 0, 17),
-                    trial.suggest_int('nom_5_min_count', 30, 100),
-                    trial.suggest_uniform('nom_5_min_avg', 0.1, 0.15),
-                    trial.suggest_uniform('nom_5_max_avg', 0.25, 0.3)
+                    trial.suggest_int('nom_5_na_count', 5, 10),
+                    trial.suggest_int('nom_5_min_count', 50, 60),
+                    trial.suggest_uniform('nom_5_min_avg', 0.125, 0.135),
+                    trial.suggest_uniform('nom_5_max_avg', 0.275, 0.285)
                 ],
                 'nom_6': [
-                    trial.suggest_int('nom_6_na_count', 0, 17),
-                    trial.suggest_int('nom_6_min_count', 30, 100),
-                    trial.suggest_uniform('nom_6_min_avg', 0.07, 0.15),
-                    trial.suggest_uniform('nom_6_max_avg', 0.24, 0.3)
+                    trial.suggest_int('nom_6_na_count', 8, 13),
+                    trial.suggest_int('nom_6_min_count', 27, 37),
+                    trial.suggest_uniform('nom_6_min_avg', 0.08, 0.09),
+                    trial.suggest_uniform('nom_6_max_avg', 0.28, 0.29)
                 ],
                 'nom_9': [
-                    trial.suggest_int('nom_9_na_count', 0, 17),
-                    trial.suggest_int('nom_9_min_count', 30, 100),
-                    trial.suggest_uniform('nom_9_min_avg', 0.05, 0.15),
-                    trial.suggest_uniform('nom_9_max_avg', 0.25, 0.32)
+                    trial.suggest_int('nom_9_na_count', 13, 18),
+                    trial.suggest_int('nom_9_min_count', 21, 31),
+                    trial.suggest_uniform('nom_9_min_avg', 0.127, 0.137),
+                    trial.suggest_uniform('nom_9_max_avg', 0.23, 0.33)
                 ]
             }
 
@@ -454,7 +454,7 @@ class BayesSearch(BaseEstimator, TransformerMixin):
             estimator = LogisticRegression(
                 random_state=2020,
                 C=trial.suggest_uniform('C', 0.052, 0.054),
-                class_weight='balanced',
+                class_weight={0: 1, 1: trial.suggest_int('class_1', 1, 10)},
                 solver='liblinear',
                 max_iter=2020,
                 fit_intercept=True,
@@ -813,7 +813,7 @@ class LgbClassifier(BaseEstimator):
             categorical_feature='auto',
             feature_name='auto',
             early_stopping_rounds=100,
-            verbose=20):
+            verbose=200):
         score = 0
 
         if self.n_splits > 1:
@@ -855,7 +855,7 @@ class LgbClassifier(BaseEstimator):
         return self
 
     def predict_proba(self, x):
-        predicted = np.zeros(len(x))
+        predicted = np.zeros(x.shape[0])
 
         for estimator in self.estimators:
             p = estimator.predict_proba(x)

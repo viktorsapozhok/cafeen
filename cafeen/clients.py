@@ -20,8 +20,12 @@ def submit_1(**kwargs):
 
     ordinal_features = ['ord_4', 'ord_5']
     splits = [3, 3, 3]
-    groups = [11, 65, 28]
-    min_cat_size = [128, 84, 72]
+    groups = [12, 51, 27]
+    filters = {
+        'nom_5': [6, 58, 0.132, 0.284],
+        'nom_6': [10, 29, 0.088, 0.284],
+        'nom_9': [16, 30, 0.133, 0.261]
+    }
 
     cardinal_encoding = dict()
 
@@ -32,9 +36,9 @@ def submit_1(**kwargs):
             shuffle=True,
             random_state=2020)
         cardinal_encoding[feature]['n_groups'] = groups[i]
-        cardinal_encoding[feature]['min_cat_size'] = min_cat_size[i]
+        cardinal_encoding[feature]['filter'] = filters[feature]
 
-    correct_features = {'ord_4': True, 'ord_5': False, 'day': True}
+    correct_features = {'ord_4': True, 'ord_5': False, 'day': True, 'nom_7': True}
 
     df, valid_y = utils.read_data(
         nrows=nrows,
@@ -55,8 +59,8 @@ def submit_1(**kwargs):
 
     estimator = LogisticRegression(
         random_state=2020,
-        C=0.053,
-        class_weight='balanced',
+        C=0.054,
+        class_weight={0: 1, 1: 2},
         solver='liblinear',
         max_iter=2020,
         fit_intercept=True,
@@ -65,10 +69,29 @@ def submit_1(**kwargs):
 
     #    estimator = steps.NaiveBayes(na_value=-1, correct_features=correct_features)
 
+#    estimator = steps.LgbClassifier(
+#        estimator=lgb.LGBMClassifier(
+#            objective='binary',
+#            metric='auc',
+#            is_unbalance=True,
+#            boost_from_average=False,
+#            n_estimators=kwargs.get('n_estimators', 100000),
+#            learning_rate=kwargs.get('eta', 0.1),
+#            num_leaves=2,
+#            min_child_samples=35,
+#            colsample_bytree=1,
+#            reg_alpha=0,
+#            reg_lambda=0,
+#            n_jobs=8),
+#        n_splits=5)
+
     if valid_y is None:
         submitter = steps.Submitter(estimator, config.path_to_data)
     else:
         submitter = steps.Submitter(estimator)
+
+    if isinstance(train_y, pd.Series):
+        train_y = train_y.values
 
     y_pred = submitter.fit(train_x, train_y).predict_proba(test_x, test_id=test_id)
 
