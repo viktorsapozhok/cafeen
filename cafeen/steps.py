@@ -34,6 +34,7 @@ class Encoder(BaseEstimator, TransformerMixin):
             self,
             ordinal_features=None,
             cardinal_encoding=None,
+            filters=None,
             handle_missing=True,
             log_alpha=0.1,
             one_hot_encoding=True,
@@ -42,6 +43,7 @@ class Encoder(BaseEstimator, TransformerMixin):
     ):
         self.cardinal_encoding = cardinal_encoding
         self.handle_missing = handle_missing
+        self.filters = filters
         self.correct_features = correct_features
         self.log_alpha = log_alpha
         self.one_hot_encoding = one_hot_encoding
@@ -91,11 +93,13 @@ class Encoder(BaseEstimator, TransformerMixin):
 #        _x = self.target_encoding(_x, ['ord_5'], na_value=na_value)
 #        _x = self.group_features(_x, ['ord_5'], n_groups=26, min_group_size=None)
 
+        for feature in self.filters.keys():
+            _x = self.filter_feature(_x, feature, self.filters[feature])
+
         for feature in self.cardinal_features:
             cv = self.cardinal_encoding[feature]['cv']
             n_groups = self.cardinal_encoding[feature]['n_groups']
 
-            _x = self.filter_feature(_x, feature, self.cardinal_encoding[feature]['filter'])
             _x = self.target_encoding_cv(_x, [feature], cv, na_value=na_value)
 
             if n_groups > 0:
@@ -145,8 +149,7 @@ class Encoder(BaseEstimator, TransformerMixin):
         _test_id = _test['id']
 
         if self.one_hot_encoding:
-            ohe_features = [f for f in features if f not in self.ordinal_features] + \
-                           [f for f in self.ordinal_features if _x[f].nunique() > 100]
+            ohe_features = [f for f in features if f not in self.ordinal_features]
             ordinal_features = [f for f in features if f not in ohe_features]
 
             encoder = OneHotEncoder(sparse=True)
@@ -330,21 +333,11 @@ class Encoder(BaseEstimator, TransformerMixin):
         return x
 
     @staticmethod
-    def group_features(x, features, n_groups, min_group_size=None):
+    def group_features(x, features, n_groups):
         for feature in features:
-            if min_group_size is not None:
-                groups = x.groupby(feature)['target'].count()
-                group_index = list(groups[groups >= min_group_size].index)
-                grouped = ~x[feature].isin(group_index)
-
-                x.loc[grouped, feature] = pd.qcut(
-                    x.loc[grouped, feature],
-                    n_groups,
-                    labels=False,
-                    duplicates='drop')
-            else:
-                x[feature] = pd.qcut(
-                    x[feature], n_groups, labels=False, duplicates='drop')
+            mask = x[feature] >= 0
+            x.loc[mask, feature] = \
+                pd.qcut(x.loc[mask, feature], n_groups, labels=False, duplicates='drop')
 
         return x
 
@@ -355,25 +348,27 @@ class Encoder(BaseEstimator, TransformerMixin):
         stat = x[mask].groupby(feature)['target'].agg(['count', 'mean'])
 
         na_filter = list(stat[stat['count'] < filter_[0]].index)
-        mask = x[feature].isin(na_filter)
-        x.loc[mask, feature] = 'np.nan'
-        n_na = mask.sum()
+        mask_na = x[feature].isin(na_filter)
 
-        filtered = list(stat[(stat['count'] >= filter_[0]) &
-                             (stat['count'] < filter_[1]) &
-                             (stat['mean'] < filter_[2])].index)
-        mask = x[feature].isin(filtered)
-        x.loc[mask, feature] = 'low'
-        n_low = mask.sum()
+        filtered = list(stat[stat['mean'] < filter_[2]].index)
+        mask_low = x[feature].isin(filtered)
 
-        filtered = list(stat[(stat['count'] >= filter_[0]) &
-                             (stat['count'] < filter_[1]) &
-                             (stat['mean'] > filter_[2])].index)
-        mask = x[feature].isin(filtered)
-        x.loc[mask, feature] = 'high'
-        n_high = mask.sum()
+        filtered = list(stat[stat['mean'] > filter_[3]].index)
+        mask_high = x[feature].isin(filtered)
 
-        logger.info(f'{feature}: {n_na} na, {n_low} low, {n_high} high')
+        if x[feature].dtype == 'object':
+            x.loc[mask_na, feature] = 'nan'
+            x.loc[~mask_na & mask_low, feature] = 'low'
+            x.loc[~mask_na & mask_high, feature] = 'high'
+        else:
+            x.loc[mask_na, feature] = -1
+            x.loc[~mask_na & mask_low, feature] = -2
+            x.loc[~mask_na & mask_high, feature] = -3
+
+        logger.info(
+            f'{feature}: {mask_na.sum()} na, '
+            f'{(~mask_na & mask_low).sum()} low, '
+            f'{(~mask_na & mask_high).sum()} high')
 
         return x
 
@@ -396,44 +391,45 @@ class BayesSearch(BaseEstimator, TransformerMixin):
             n_splits = [3, 4, 5]
 
             groups = {
-                'nom_5': [11, 12],
-                'nom_6': [50, 51],
-                'nom_9': [27, 28],
+                'nom_5': [12, 12],
+                'nom_6': [51, 24],
+                'nom_9': [27, 29],
             }
 
             filters = {
                 'nom_5': [
-                    trial.suggest_int('nom_5_na_count', 5, 10),
-                    trial.suggest_int('nom_5_min_count', 50, 60),
-                    trial.suggest_uniform('nom_5_min_avg', 0.125, 0.135),
-                    trial.suggest_uniform('nom_5_max_avg', 0.275, 0.285)
+                    87, #trial.suggest_int('nom_5_na_count', 70, 100),
+                    0, #trial.suggest_int('nom_5_min_count', 2, 500),
+                    0, #trial.suggest_uniform('nom_5_min_avg', 0, 0.06),
+                    0.4, #trial.suggest_uniform('nom_5_max_avg', 0.31, 0.35)
                 ],
                 'nom_6': [
-                    trial.suggest_int('nom_6_na_count', 8, 13),
-                    trial.suggest_int('nom_6_min_count', 27, 37),
-                    trial.suggest_uniform('nom_6_min_avg', 0.08, 0.09),
-                    trial.suggest_uniform('nom_6_max_avg', 0.28, 0.29)
+                    130, #trial.suggest_int('nom_6_na_count', 130, 150),
+                    0, #trial.suggest_int('nom_6_min_count', 2, 500),
+                    0, #trial.suggest_uniform('nom_6_min_avg', 0, 0.06),
+                    0.4, #trial.suggest_uniform('nom_6_max_avg', 0.33, 0.4)
                 ],
                 'nom_9': [
-                    trial.suggest_int('nom_9_na_count', 13, 18),
-                    trial.suggest_int('nom_9_min_count', 21, 31),
-                    trial.suggest_uniform('nom_9_min_avg', 0.127, 0.137),
-                    trial.suggest_uniform('nom_9_max_avg', 0.23, 0.33)
-                ]
+                    17, #trial.suggest_int('nom_9_na_count', 10, 30),
+                    0, #trial.suggest_int('nom_9_min_count', 2, 500),
+                    0.075, #trial.suggest_uniform('nom_9_min_avg', 0.05, 0.08),
+                    0.45, #trial.suggest_uniform('nom_9_max_avg', 0.325, 0.5)
+                ],
             }
 
             cardinal_encoding = dict()
 
             for feature in ['nom_5', 'nom_6', 'nom_9']:
+                if feature in ['nom_5']:
+                    continue
+
                 fid = feature[-1]
                 cardinal_encoding[feature] = dict()
                 cardinal_encoding[feature]['cv'] = StratifiedKFold(
                     n_splits=3,
                     shuffle=True,
                     random_state=2020)
-                cardinal_encoding[feature]['n_groups'] = \
-                    trial.suggest_int('groups_' + str(fid), groups[feature][0], groups[feature][1])
-                cardinal_encoding[feature]['filter'] = filters[feature]
+                cardinal_encoding[feature]['n_groups'] = groups[feature][0]
 
             correct_features = {
                 'ord_4': True,
@@ -445,6 +441,7 @@ class BayesSearch(BaseEstimator, TransformerMixin):
             encoder = Encoder(
                 ordinal_features=ordinal_features,
                 cardinal_encoding=cardinal_encoding,
+                filters=filters,
                 handle_missing=True,
                 log_alpha=0,
                 one_hot_encoding=True,
@@ -453,13 +450,17 @@ class BayesSearch(BaseEstimator, TransformerMixin):
 
             estimator = LogisticRegression(
                 random_state=2020,
-                C=trial.suggest_uniform('C', 0.052, 0.054),
-                class_weight={0: 1, 1: trial.suggest_int('class_1', 1, 10)},
+                C=0.054,
+                class_weight={0: 1, 1: 2.01},
                 solver='liblinear',
                 max_iter=2020,
                 fit_intercept=True,
                 penalty='l2',
                 verbose=0)
+
+#            estimator = LogReg(
+#                estimator=estimator_,
+#                threshold=trial.suggest_uniform('coef_min', 0, 0.05))
 
 #            estimator = NaiveBayes(na_value=-1, correct_features=['ord_3', 'ord_4', 'month', 'ord_0'])
 
@@ -1034,3 +1035,30 @@ class TargetEncoder(BaseEstimator, TransformerMixin):
             x[feature] = x[feature].map(self.target_mean[feature].to_dict())
         return x
 
+
+class LogReg(BaseEstimator):
+    def __init__(self, estimator, threshold):
+        self.estimator_ = estimator
+        self.threshold = threshold
+        self.features_ = None
+
+    def fit(self, x, y):
+        logger.info(f'fitting {x.shape}')
+        self.estimator_.fit(x, y)
+
+        for i in range(10):
+            to_remove = (np.abs(self.estimator_.coef_) > self.threshold).sum()
+
+            if to_remove > 0:
+                self.features_ = (np.abs(self.estimator_.coef_) > self.threshold)[0]
+                logger.info(f'fitting {x[:, self.features_].shape}')
+                self.estimator_.fit(x[:, self.features_], y)
+            else:
+                break
+
+#        logger.info(f'fitting {x[:, self.features_].shape}')
+#        self.estimator_.fit(x[:, self.features_], y)
+        return self
+
+    def predict_proba(self, x):
+        return self.estimator_.predict_proba(x[:, self.features_])
