@@ -90,9 +90,6 @@ class Encoder(BaseEstimator, TransformerMixin):
                             if f in self.ordinal_features and f not in self.cardinal_features]
         _x = self.encode_ordinal(_x, ordinal_features, na_value)
 
-#        _x = self.target_encoding(_x, ['ord_5'], na_value=na_value)
-#        _x = self.group_features(_x, ['ord_5'], n_groups=26, min_group_size=None)
-
         for feature in self.filters.keys():
             _x = self.filter_feature(_x, feature, self.filters[feature])
 
@@ -118,30 +115,24 @@ class Encoder(BaseEstimator, TransformerMixin):
                 except (TypeError, ValueError):
                     continue
 
-        for feature in features:
-            if self.handle_missing:
-#                _x.loc[x[feature].isna(), feature] = -1
-                if feature not in self.ordinal_features:
-                    _x.loc[x[feature].isna(), feature] = na_value
-#            _x.loc[_x[feature].isna(), feature] = na_value
-            _x.loc[_x[feature].isna(), feature] = -1
-
-            if self.log_alpha > 0:
-                _x[feature] = np.log(self.log_alpha + _x[feature])
-
         if self.verbose:
             logger.info('')
             logger.info('amount of unique values')
             for feature in features:
                 logger.info(f'{feature}: {_x[feature].nunique()}')
 
+        for feature in features:
+            if self.handle_missing:
+                if feature not in self.ordinal_features:
+                    _x.loc[x[feature].isna(), feature] = na_value
+            _x.loc[_x[feature].isna(), feature] = -1
+
+            if self.log_alpha > 0:
+                _x[feature] = np.log(self.log_alpha + _x[feature])
+
         assert _x[features].isnull().sum().sum() == 0
 
         _train, _test = utils.split_data(_x)
-#        _train_y = _train['target'].values
-#        _train_x = _train[features].values
-#        _test_x = _test[features].values
-#        _test_id = _test['id'].values
 
         _train_y = _train['target']
         _train_x = _train[features]
@@ -342,7 +333,7 @@ class Encoder(BaseEstimator, TransformerMixin):
         return x
 
     @staticmethod
-    def filter_feature( x, feature, filter_):
+    def filter_feature(x, feature, filter_):
         mask = x['target'] > -1
 
         stat = x[mask].groupby(feature)['target'].agg(['count', 'mean'])
@@ -391,29 +382,29 @@ class BayesSearch(BaseEstimator, TransformerMixin):
             n_splits = [3, 4, 5]
 
             groups = {
-                'nom_5': [12, 12],
+                'nom_5': [12, 14],
                 'nom_6': [51, 24],
                 'nom_9': [27, 29],
             }
 
             filters = {
                 'nom_5': [
-                    87, #trial.suggest_int('nom_5_na_count', 70, 100),
+                    trial.suggest_int('nom_5_na_count', 70, 100),
                     0, #trial.suggest_int('nom_5_min_count', 2, 500),
-                    0, #trial.suggest_uniform('nom_5_min_avg', 0, 0.06),
-                    0.4, #trial.suggest_uniform('nom_5_max_avg', 0.31, 0.35)
+                    trial.suggest_uniform('nom_5_min_avg', 0.05, 0.1),
+                    trial.suggest_uniform('nom_5_max_avg', 0.28, 0.4)
                 ],
                 'nom_6': [
-                    130, #trial.suggest_int('nom_6_na_count', 130, 150),
+                    trial.suggest_int('nom_6_na_count', 115, 135),
                     0, #trial.suggest_int('nom_6_min_count', 2, 500),
-                    0, #trial.suggest_uniform('nom_6_min_avg', 0, 0.06),
-                    0.4, #trial.suggest_uniform('nom_6_max_avg', 0.33, 0.4)
+                    trial.suggest_uniform('nom_6_min_avg', 0.05, 0.1),
+                    trial.suggest_uniform('nom_6_max_avg', 0.28, 0.4)
                 ],
                 'nom_9': [
-                    17, #trial.suggest_int('nom_9_na_count', 10, 30),
+                    trial.suggest_int('nom_9_na_count', 7, 35),
                     0, #trial.suggest_int('nom_9_min_count', 2, 500),
-                    0.075, #trial.suggest_uniform('nom_9_min_avg', 0.05, 0.08),
-                    0.45, #trial.suggest_uniform('nom_9_max_avg', 0.325, 0.5)
+                    trial.suggest_uniform('nom_9_min_avg', 0.05, 0.1),
+                    trial.suggest_uniform('nom_9_max_avg', 0.28, 0.4)
                 ],
             }
 
@@ -1037,28 +1028,32 @@ class TargetEncoder(BaseEstimator, TransformerMixin):
 
 
 class LogReg(BaseEstimator):
-    def __init__(self, estimator, threshold):
-        self.estimator_ = estimator
-        self.threshold = threshold
-        self.features_ = None
+    def __init__(self, estimator, n_splits):
+        self.estimators = [estimator] * n_splits
+        self.n_splits = n_splits
 
-    def fit(self, x, y):
-        logger.info(f'fitting {x.shape}')
-        self.estimator_.fit(x, y)
+    def fit(self, x, y=None):
+        if self.n_splits > 1:
+            cv = StratifiedKFold(
+                n_splits=self.n_splits,
+                shuffle=True,
+                random_state=2020)
 
-        for i in range(10):
-            to_remove = (np.abs(self.estimator_.coef_) > self.threshold).sum()
+            for fold, (train_index, _) in enumerate(cv.split(x, y)):
+                train_x, train_y = x[train_index], y[train_index]
 
-            if to_remove > 0:
-                self.features_ = (np.abs(self.estimator_.coef_) > self.threshold)[0]
-                logger.info(f'fitting {x[:, self.features_].shape}')
-                self.estimator_.fit(x[:, self.features_], y)
-            else:
-                break
+                logger.debug(f'training on fold {fold}')
+                self.estimators[fold].fit(train_x, train_y)
+        else:
+            self.estimators[0].fit(x, y)
 
-#        logger.info(f'fitting {x[:, self.features_].shape}')
-#        self.estimator_.fit(x[:, self.features_], y)
         return self
 
     def predict_proba(self, x):
-        return self.estimator_.predict_proba(x[:, self.features_])
+        predicted = np.zeros(x.shape[0])
+
+        for estimator in self.estimators:
+            p = estimator.predict_proba(x)
+            predicted += p[:, 1] / self.n_splits
+
+        return predicted
