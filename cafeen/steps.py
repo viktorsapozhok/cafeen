@@ -72,8 +72,8 @@ class Encoder(BaseEstimator, TransformerMixin):
         na_value = self.get_na_value(x)
         features = self.get_features(_x.columns)
 
-        _x['ord_5'] = x['ord_5'].str[0]
-        _x.loc[x['ord_5'].isna(), 'ord_5'] = np.nan
+#        _x['ord_5'] = x['ord_5'].str[0]
+#        _x.loc[x['ord_5'].isna(), 'ord_5'] = np.nan
 
         if self.correct_features['ord_4']:
             _x = self.correct_ord_4(_x)

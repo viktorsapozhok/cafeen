@@ -22,7 +22,7 @@ def submit_1(**kwargs):
     splits = [3, 3]
     groups = [51, 27]
     filters = {
-        'nom_5': [91, 0, 0, 0.5],
+        'nom_5': [0, 0, 0, 0.5],
         'nom_6': [126, 0, 0, 0.5],
         'nom_9': [12, 0, 0.044, 0.398]
     }
@@ -63,6 +63,7 @@ def submit_1(**kwargs):
         C=0.054,
         class_weight={0: 1, 1: 2.01},
         solver='liblinear',
+        tol=1e-7,
         max_iter=2020,
         fit_intercept=True,
         penalty='l2',
