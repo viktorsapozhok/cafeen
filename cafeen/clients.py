@@ -18,7 +18,7 @@ logger = logging.getLogger('cafeen')
 def submit_1(**kwargs):
     nrows = kwargs.get('nrows', None)
 
-    ordinal_features = ['ord_4', 'ord_5']
+    ordinal_features = ['ord_4', 'ord_5', 'nom_7', 'nom_8']
     splits = [3, 3]
     groups = [51, 27]
     filters = {

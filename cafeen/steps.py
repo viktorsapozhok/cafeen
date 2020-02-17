@@ -252,12 +252,18 @@ class Encoder(BaseEstimator, TransformerMixin):
                 x[feature] = x[feature].map(encoding.to_dict())
             else:
                 encoding = train.groupby(feature)['target'].agg(['mean', 'count'])
+                first = 1
+
+                if feature in ['nom_7', 'nom_8']:
+                    encoding = encoding.sort_values(by='mean')
+                    first = 0
+
                 encoding['count'] = list(range(len(encoding)))
 
-                nan_pos = (na_value - encoding['mean'].iloc[1]) / \
-                          (encoding['mean'].iloc[-1] - encoding['mean'].iloc[1])
+                nan_pos = (na_value - encoding['mean'].iloc[first]) / \
+                          (encoding['mean'].iloc[-1] - encoding['mean'].iloc[first])
 
-                p_min = encoding['count'].iloc[1]
+                p_min = encoding['count'].iloc[first]
                 p_max = encoding['count'].iloc[-1]
                 encoding.loc[encoding.index == -1, 'count'] = p_min + nan_pos * (p_max - p_min)
                 encoding['count'] = (encoding['count'] - p_min) / (p_max - p_min)
