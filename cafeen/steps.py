@@ -89,19 +89,20 @@ class Encoder(BaseEstimator, TransformerMixin):
                             if f in self.ordinal_features and f not in self.cardinal_features]
         _x = self.encode_ordinal(_x, ordinal_features, na_value)
 
-        for feature in self.filters.keys():
-            _x = self.filter_feature(_x, feature, self.filters[feature])
+#        for feature in self.filters.keys():
+#            _x = self.filter_feature(_x, feature, self.filters[feature])
 
         for feature in self.cardinal_features:
             cv = self.cardinal_encoding[feature]['cv']
             n_groups = self.cardinal_encoding[feature]['n_groups']
 
             _x = self.target_encoding_cv(_x, [feature], cv, na_value=na_value)
+#            _x = self.target_encoding(_x, [feature], na_value=na_value)
 
             if n_groups > 0:
                 _x = self.group_features(_x, [feature], n_groups=n_groups)
 
-        _x = self.target_encoding(_x, self.cardinal_features, na_value=na_value)
+        _x = self.target_encoding(_x, self.cardinal_features, na_value=na_value, x_ref=x.copy())
 
         if self.verbose:
             logger.info(f'na_value: {na_value:.5f}')
@@ -271,8 +272,7 @@ class Encoder(BaseEstimator, TransformerMixin):
 
         return x
 
-    @staticmethod
-    def target_encoding(x, features, na_value=None):
+    def target_encoding(self, x, features, na_value=None, x_ref=None):
         mask = x['target'] > -1
 
         for feature in features:
@@ -283,6 +283,13 @@ class Encoder(BaseEstimator, TransformerMixin):
                 target_mean['-1'] = na_value
 
             x[feature] = x[feature].map(target_mean.to_dict())
+
+            if x_ref is not None:
+                mean_ref = x_ref[mask].groupby(feature)['target'].agg(['count', 'mean'])
+                mean_ref['count'] /= mean_ref['count'].max()
+                mean_ref.loc[mean_ref['count'] < self.filters[feature][0], 'mean'] = -1
+                feature_ref = x_ref[feature].map(mean_ref['mean'].to_dict())
+                x.loc[feature_ref >= 0, feature] = feature_ref[feature_ref >= 0]
 
         return x
 
@@ -330,10 +337,26 @@ class Encoder(BaseEstimator, TransformerMixin):
 
     @staticmethod
     def group_features(x, features, n_groups):
+        levels = [i/n_groups for i in range(n_groups + 1)]
+
         for feature in features:
             mask = x[feature] >= 0
             x.loc[mask, feature] = \
                 pd.qcut(x.loc[mask, feature], n_groups, labels=False, duplicates='drop')
+
+#            bins = x.loc[mask, feature].quantile(levels).drop_duplicates().values.tolist()
+
+#            if bins[0] > 0:
+#                bins = [0] + bins
+
+#            if bins[-1] < 1:
+#                bins += [1]
+#            x.loc[mask, feature] = pd.cut(x.loc[mask, feature], bins, labels=False, duplicates='drop')
+
+#            for i in range(len(bins) - 1):
+#                x.loc[mask & (x[feature] >= bins[i]) & (x[feature] < bins[i + 1]), feature] = i + 1
+
+#            x.loc[mask, feature] = pd.cut(x.loc[mask, feature], bins, labels=False, duplicates='drop')
 
         return x
 
@@ -381,26 +404,26 @@ class BayesSearch(BaseEstimator, TransformerMixin):
             n_splits = [3, 4, 5]
 
             groups = {
-                'nom_5': [12, 14],
-                'nom_6': [51, 24],
-                'nom_9': [27, 29],
+                'nom_5': [13, 14],
+                'nom_6': [51, 52],
+                'nom_9': [28, 28],
             }
 
             filters = {
                 'nom_5': [
-                    0, #trial.suggest_int('nom_5_na_count', 70, 100),
+                    0, #trial.suggest_uniform('nom_5_count', 0, 1),
                     0, #trial.suggest_int('nom_5_min_count', 2, 500),
                     0, #trial.suggest_uniform('nom_5_min_avg', 0.05, 0.1),
                     0.5, #trial.suggest_uniform('nom_5_max_avg', 0.28, 0.4)
                 ],
                 'nom_6': [
-                    126, #trial.suggest_int('nom_6_na_count', 115, 135),
+                    0.928, #trial.suggest_uniform('nom_6_count', 0, 1),
                     0, #trial.suggest_int('nom_6_min_count', 2, 500),
                     0, #trial.suggest_uniform('nom_6_min_avg', 0.05, 0.1),
                     0.5, #trial.suggest_uniform('nom_6_max_avg', 0.28, 0.4)
                 ],
                 'nom_9': [
-                    12, #trial.suggest_int('nom_9_na_count', 7, 35),
+                    0, #trial.suggest_int('nom_9_count', 0, 1),
                     0, #trial.suggest_int('nom_9_min_count', 2, 500),
                     0.044, #trial.suggest_uniform('nom_9_min_avg', 0.05, 0.1),
                     0.398, #trial.suggest_uniform('nom_9_max_avg', 0.28, 0.4)
@@ -410,8 +433,8 @@ class BayesSearch(BaseEstimator, TransformerMixin):
             cardinal_encoding = dict()
 
             for feature in ['nom_5', 'nom_6', 'nom_9']:
-                if feature in ['nom_5']:
-                    continue
+#                if feature in ['nom_5']:
+#                    continue
 
                 fid = feature[-1]
                 cardinal_encoding[feature] = dict()
@@ -419,7 +442,8 @@ class BayesSearch(BaseEstimator, TransformerMixin):
                     n_splits=3,
                     shuffle=True,
                     random_state=2020)
-                cardinal_encoding[feature]['n_groups'] = groups[feature][0]
+                cardinal_encoding[feature]['n_groups'] = \
+                    trial.suggest_int('n_groups_' + feature, groups[feature][0], groups[feature][1])
 
             correct_features = {
                 'ord_4': True,
