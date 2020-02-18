@@ -18,7 +18,7 @@ logger = logging.getLogger('cafeen')
 def submit_1(**kwargs):
     nrows = kwargs.get('nrows', None)
 
-    ordinal_features = ['ord_4', 'ord_5', 'nom_7', 'nom_8']
+    ordinal_features = ['ord_4', 'ord_5']
     splits = [3, 3]
     groups = [51, 27]
     filters = {
@@ -56,36 +56,16 @@ def submit_1(**kwargs):
 
     train_x, train_y, test_x, test_id = encoder.fit_transform(df)
 
-    logger.debug(f'train: {train_x.shape}, test: {test_x.shape}')
-
     estimator = LogisticRegression(
         random_state=2020,
         C=0.054,
         class_weight={0: 1, 1: 2.01},
         solver='liblinear',
-        tol=1e-7,
+        tol=1e-4,
         max_iter=2020,
         fit_intercept=True,
         penalty='l2',
         verbose=1)
-
-    #    estimator = steps.NaiveBayes(na_value=-1, correct_features=correct_features)
-
-#    estimator = steps.LgbClassifier(
-#        estimator=lgb.LGBMClassifier(
-#            objective='binary',
-#            metric='auc',
-#            is_unbalance=True,
-#            boost_from_average=False,
-#            n_estimators=kwargs.get('n_estimators', 100000),
-#            learning_rate=kwargs.get('eta', 0.1),
-#            num_leaves=2,
-#            min_child_samples=35,
-#            colsample_bytree=1,
-#            reg_alpha=0,
-#            reg_lambda=0,
-#            n_jobs=8),
-#        n_splits=5)
 
     if valid_y is None:
         submitter = steps.Submitter(estimator, config.path_to_data)
@@ -98,11 +78,9 @@ def submit_1(**kwargs):
     y_pred = submitter.fit(train_x, train_y).predict_proba(test_x, test_id=test_id)
 
     if valid_y is not None:
-        valid_y = valid_y.merge(y_pred[['id', 'target']], how='left', on='id')
-        score = roc_auc_score(valid_y['y_true'].values, valid_y['target'].values)
-        logger.info('')
+        _valid_y = valid_y.merge(y_pred[['id', 'target']], how='left', on='id')
+        score = roc_auc_score(_valid_y['y_true'].values, _valid_y['target'].values)
         logger.debug(f'score: {score}')
-        logger.info('')
 
 
 def submit_2(**kwargs):

@@ -68,9 +68,7 @@ class Encoder(BaseEstimator, TransformerMixin):
 
     def transform(self, x):
         _x = x.copy()
-#        _x = self.augment_train(_x)
         na_value = self.get_na_value(x)
-        features = self.get_features(_x.columns)
 
 #        _x['ord_5'] = x['ord_5'].str[0]
 #        _x.loc[x['ord_5'].isna(), 'ord_5'] = np.nan
@@ -84,6 +82,7 @@ class Encoder(BaseEstimator, TransformerMixin):
         if self.correct_features['nom_7']:
             _x = self.correct_nom_7(_x)
 
+        features = self.get_features(_x.columns)
         _x = self.target_encoding(_x, self.nominal_features, na_value=na_value)
 
         ordinal_features = [f for f in features
@@ -123,7 +122,7 @@ class Encoder(BaseEstimator, TransformerMixin):
 
         for feature in features:
             if self.handle_missing:
-                if feature not in self.ordinal_features:
+                if (feature not in self.ordinal_features) and (feature in x.columns):
                     _x.loc[x[feature].isna(), feature] = na_value
             _x.loc[_x[feature].isna(), feature] = -1
 
@@ -291,7 +290,7 @@ class Encoder(BaseEstimator, TransformerMixin):
         train, test = utils.split_data(x)
         del x
 
-        train.sort_index(inplace=True)
+        train = train.sort_index()
         encoded = []
 
         for _iter in range(n_rounds):
@@ -338,8 +337,7 @@ class Encoder(BaseEstimator, TransformerMixin):
 
         return x
 
-    @staticmethod
-    def filter_feature(x, feature, filter_):
+    def filter_feature(self, x, feature, filter_):
         mask = x['target'] > -1
 
         stat = x[mask].groupby(feature)['target'].agg(['count', 'mean'])
@@ -362,10 +360,11 @@ class Encoder(BaseEstimator, TransformerMixin):
             x.loc[~mask_na & mask_low, feature] = -2
             x.loc[~mask_na & mask_high, feature] = -3
 
-        logger.info(
-            f'{feature}: {mask_na.sum()} na, '
-            f'{(~mask_na & mask_low).sum()} low, '
-            f'{(~mask_na & mask_high).sum()} high')
+        if self.verbose:
+            logger.info(
+                f'{feature}: {mask_na.sum()} na, '
+                f'{(~mask_na & mask_low).sum()} low, '
+                f'{(~mask_na & mask_high).sum()} high')
 
         return x
 
@@ -379,12 +378,6 @@ class BayesSearch(BaseEstimator, TransformerMixin):
     def fit(self, x, y=None):
         def _evaluate(trial):
             ordinal_features = ['ord_4', 'ord_5']
-
-#            for i in range(5, 10):
-#                as_ordinal = trial.suggest_categorical('nom_' + str(i), [False, False])
-#                if as_ordinal:
-#                    ordinal_features += ['nom_' + str(i)]
-
             n_splits = [3, 4, 5]
 
             groups = {
@@ -395,22 +388,22 @@ class BayesSearch(BaseEstimator, TransformerMixin):
 
             filters = {
                 'nom_5': [
-                    trial.suggest_int('nom_5_na_count', 70, 100),
+                    0, #trial.suggest_int('nom_5_na_count', 70, 100),
                     0, #trial.suggest_int('nom_5_min_count', 2, 500),
-                    trial.suggest_uniform('nom_5_min_avg', 0.05, 0.1),
-                    trial.suggest_uniform('nom_5_max_avg', 0.28, 0.4)
+                    0, #trial.suggest_uniform('nom_5_min_avg', 0.05, 0.1),
+                    0.5, #trial.suggest_uniform('nom_5_max_avg', 0.28, 0.4)
                 ],
                 'nom_6': [
-                    trial.suggest_int('nom_6_na_count', 115, 135),
+                    126, #trial.suggest_int('nom_6_na_count', 115, 135),
                     0, #trial.suggest_int('nom_6_min_count', 2, 500),
-                    trial.suggest_uniform('nom_6_min_avg', 0.05, 0.1),
-                    trial.suggest_uniform('nom_6_max_avg', 0.28, 0.4)
+                    0, #trial.suggest_uniform('nom_6_min_avg', 0.05, 0.1),
+                    0.5, #trial.suggest_uniform('nom_6_max_avg', 0.28, 0.4)
                 ],
                 'nom_9': [
-                    trial.suggest_int('nom_9_na_count', 7, 35),
+                    12, #trial.suggest_int('nom_9_na_count', 7, 35),
                     0, #trial.suggest_int('nom_9_min_count', 2, 500),
-                    trial.suggest_uniform('nom_9_min_avg', 0.05, 0.1),
-                    trial.suggest_uniform('nom_9_max_avg', 0.28, 0.4)
+                    0.044, #trial.suggest_uniform('nom_9_min_avg', 0.05, 0.1),
+                    0.398, #trial.suggest_uniform('nom_9_max_avg', 0.28, 0.4)
                 ],
             }
 
@@ -455,12 +448,6 @@ class BayesSearch(BaseEstimator, TransformerMixin):
                 penalty='l2',
                 verbose=0)
 
-#            estimator = LogReg(
-#                estimator=estimator_,
-#                threshold=trial.suggest_uniform('coef_min', 0, 0.05))
-
-#            estimator = NaiveBayes(na_value=-1, correct_features=['ord_3', 'ord_4', 'month', 'ord_0'])
-
             scores = []
 
             for fold in range(self.n_folds):
@@ -484,7 +471,6 @@ class BayesSearch(BaseEstimator, TransformerMixin):
                 _train_x, _train_y, _test_x, _test_id = encoder.fit_transform(train)
 
                 predicted = pd.DataFrame()
-#                predicted['id'] = _test_id
                 predicted['id'] = _test_id.values
                 predicted['y_pred'] = estimator.fit(_train_x, _train_y).predict_proba(_test_x)[:, 1]
                 del _train_x, _test_x, _train_y, _test_id
@@ -508,11 +494,8 @@ class BayesSearch(BaseEstimator, TransformerMixin):
         def _pack_best_trial(trial):
             pass
 
-#        train_x = x.copy
         study = optuna.create_study()
         study.optimize(_evaluate, n_trials=self.n_trials)
-
-        # compare best_trial vs model from file and save the best one
         _pack_best_trial(study.best_trial)
 
         return self
