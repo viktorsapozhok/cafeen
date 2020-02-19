@@ -19,26 +19,16 @@ def submit_1(**kwargs):
     nrows = kwargs.get('nrows', None)
 
     ordinal_features = ['ord_4', 'ord_5']
-    splits = [3, 3]
-    groups = [3, 5]
-    filters = {
-        'nom_5': [0],
-        'nom_6': [1],
-        'nom_9': [0]
-    }
+
+    filters = {'nom_9': [0.0000001, 7]}
 
     cardinal_encoding = dict()
+    cardinal_encoding['nom_6'] = dict()
+    cardinal_encoding['nom_6']['cv'] = StratifiedKFold(n_splits=3, shuffle=True, random_state=2020)
+    cardinal_encoding['nom_6']['n_groups'] = 3
+    cardinal_encoding['nom_9'] = dict()
 
-    for i, feature in enumerate(['nom_6', 'nom_9']):
-        cardinal_encoding[feature] = dict()
-        cardinal_encoding[feature]['cv'] = StratifiedKFold(
-            n_splits=splits[i],
-            shuffle=True,
-            random_state=2020)
-        cardinal_encoding[feature]['n_groups'] = groups[i]
-        cardinal_encoding[feature]['filter'] = filters[feature]
-
-    correct_features = {'ord_4': True, 'ord_5': False, 'day': True, 'nom_7': True}
+    correct_features = {'ord_4': False, 'ord_5': False, 'day': True, 'nom_7': False}
 
     df, valid_y = utils.read_data(
         nrows=nrows,
@@ -65,7 +55,7 @@ def submit_1(**kwargs):
         max_iter=2020,
         fit_intercept=True,
         penalty='l2',
-        verbose=1)
+        verbose=0)
 
     if valid_y is None:
         submitter = steps.Submitter(estimator, config.path_to_data)

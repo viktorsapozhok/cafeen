@@ -93,16 +93,18 @@ class Encoder(BaseEstimator, TransformerMixin):
 #            _x = self.filter_feature(_x, feature, self.filters[feature])
 
         for feature in self.cardinal_features:
-            cv = self.cardinal_encoding[feature]['cv']
-            n_groups = self.cardinal_encoding[feature]['n_groups']
+            if feature in self.filters:
+                _x = self.binning(_x, [feature], eps=self.filters[feature][0], precision=self.filters[feature][1])
+            else:
+                cv = self.cardinal_encoding[feature]['cv']
+                n_groups = self.cardinal_encoding[feature]['n_groups']
 
-            _x = self.target_encoding_cv(_x, [feature], cv, na_value=na_value)
-#            _x = self.target_encoding(_x, [feature], na_value=na_value)
+                _x = self.target_encoding_cv(_x, [feature], cv, na_value=na_value)
 
-            if n_groups > 0:
-                _x = self.group_features(_x, [feature], n_groups=n_groups)
+                if n_groups > 0:
+                    _x = self.group_features(_x, [feature], n_groups=n_groups)
 
-        _x = self.target_encoding(_x, self.cardinal_features, na_value=na_value, x_ref=x.copy())
+#        _x = self.target_encoding(_x, self.cardinal_features, na_value=na_value, x_ref=x.copy())
 
         if self.verbose:
             logger.info(f'na_value: {na_value:.5f}')
@@ -272,6 +274,20 @@ class Encoder(BaseEstimator, TransformerMixin):
 
         return x
 
+    @staticmethod
+    def binning(x, features, eps=None, precision=None):
+        mask = x['target'] > -1
+
+        for feature in features:
+            target_mean = x[mask].groupby(feature)['target'].mean()
+
+            if eps is not None:
+                target_mean = ((target_mean / eps).round() * eps).round(precision)
+
+            x[feature] = x[feature].map(target_mean.to_dict())
+
+        return x
+
     def target_encoding(self, x, features, na_value=None, x_ref=None):
         mask = x['target'] > -1
 
@@ -401,39 +417,21 @@ class BayesSearch(BaseEstimator, TransformerMixin):
     def fit(self, x, y=None):
         def _evaluate(trial):
             ordinal_features = ['ord_4', 'ord_5']
-            n_splits = [3, 4, 5]
 
-            groups = {
-                'nom_6': [2, 9],
-                'nom_9': [2, 50],
-            }
-
-            filters = {
-                'nom_5': [0],
-                'nom_6': [1],
-                'nom_9': [0],
-            }
+            filters = {'nom_9': [0.0000001, 7]}
 
             cardinal_encoding = dict()
-
-            for feature in ['nom_5', 'nom_6', 'nom_9']:
-                if feature in ['nom_5']:
-                    continue
-
-                fid = feature[-1]
-                cardinal_encoding[feature] = dict()
-                cardinal_encoding[feature]['cv'] = StratifiedKFold(
-                    n_splits=3,
-                    shuffle=True,
-                    random_state=2020)
-                cardinal_encoding[feature]['n_groups'] = \
-                    trial.suggest_int('n_groups_' + feature, groups[feature][0], groups[feature][1])
+            cardinal_encoding['nom_6'] = dict()
+            cardinal_encoding['nom_6']['cv'] = \
+                StratifiedKFold(n_splits=3, shuffle=True, random_state=2020)
+            cardinal_encoding['nom_6']['n_groups'] = 3
+            cardinal_encoding['nom_9'] = dict()
 
             correct_features = {
-                'ord_4': True,
+                'ord_4': False,
                 'ord_5': False,
                 'day': True,
-                'nom_7': True
+                'nom_7': False
             }
 
             encoder = Encoder(
