@@ -19,12 +19,12 @@ def submit_1(**kwargs):
     nrows = kwargs.get('nrows', None)
 
     ordinal_features = ['ord_4', 'ord_5']
-    splits = [3, 3, 3]
-    groups = [13, 51, 28]
+    splits = [3, 3]
+    groups = [3, 5]
     filters = {
-        'nom_5': [0, 0, 0, 0.5],
-        'nom_6': [0.928, 0, 0, 0.5],
-        'nom_9': [0, 0, 0.044, 0.398]
+        'nom_5': [0],
+        'nom_6': [1],
+        'nom_9': [0]
     }
 
     cardinal_encoding = dict()

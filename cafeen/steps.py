@@ -287,7 +287,7 @@ class Encoder(BaseEstimator, TransformerMixin):
             if x_ref is not None:
                 mean_ref = x_ref[mask].groupby(feature)['target'].agg(['count', 'mean'])
                 mean_ref['count'] /= mean_ref['count'].max()
-                mean_ref.loc[mean_ref['count'] < self.filters[feature][0], 'mean'] = -1
+                mean_ref.loc[mean_ref['count'] <= self.filters[feature][0], 'mean'] = -1
                 feature_ref = x_ref[feature].map(mean_ref['mean'].to_dict())
                 x.loc[feature_ref >= 0, feature] = feature_ref[feature_ref >= 0]
 
@@ -404,37 +404,21 @@ class BayesSearch(BaseEstimator, TransformerMixin):
             n_splits = [3, 4, 5]
 
             groups = {
-                'nom_5': [13, 14],
-                'nom_6': [51, 52],
-                'nom_9': [28, 28],
+                'nom_6': [2, 9],
+                'nom_9': [2, 50],
             }
 
             filters = {
-                'nom_5': [
-                    0, #trial.suggest_uniform('nom_5_count', 0, 1),
-                    0, #trial.suggest_int('nom_5_min_count', 2, 500),
-                    0, #trial.suggest_uniform('nom_5_min_avg', 0.05, 0.1),
-                    0.5, #trial.suggest_uniform('nom_5_max_avg', 0.28, 0.4)
-                ],
-                'nom_6': [
-                    0.928, #trial.suggest_uniform('nom_6_count', 0, 1),
-                    0, #trial.suggest_int('nom_6_min_count', 2, 500),
-                    0, #trial.suggest_uniform('nom_6_min_avg', 0.05, 0.1),
-                    0.5, #trial.suggest_uniform('nom_6_max_avg', 0.28, 0.4)
-                ],
-                'nom_9': [
-                    0, #trial.suggest_int('nom_9_count', 0, 1),
-                    0, #trial.suggest_int('nom_9_min_count', 2, 500),
-                    0.044, #trial.suggest_uniform('nom_9_min_avg', 0.05, 0.1),
-                    0.398, #trial.suggest_uniform('nom_9_max_avg', 0.28, 0.4)
-                ],
+                'nom_5': [0],
+                'nom_6': [1],
+                'nom_9': [0],
             }
 
             cardinal_encoding = dict()
 
             for feature in ['nom_5', 'nom_6', 'nom_9']:
-#                if feature in ['nom_5']:
-#                    continue
+                if feature in ['nom_5']:
+                    continue
 
                 fid = feature[-1]
                 cardinal_encoding[feature] = dict()
