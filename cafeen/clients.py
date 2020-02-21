@@ -20,19 +20,21 @@ def submit_1(**kwargs):
 
     ordinal_features = ['ord_4', 'ord_5']
 
-    filters = {'nom_9': [0.0000001, 7]}
-
     cardinal_encoding = dict()
     cardinal_encoding['nom_6'] = dict()
     cardinal_encoding['nom_6']['cv'] = StratifiedKFold(n_splits=3, shuffle=True, random_state=2020)
     cardinal_encoding['nom_6']['n_groups'] = 3
     cardinal_encoding['nom_9'] = dict()
 
-    correct_features = {'ord_4': False, 'ord_5': False, 'day': True, 'nom_7': False}
+    correct_features = {'ord_4': False, 'ord_5': False, 'day': False, 'nom_7': False}
 
     df, valid_y = utils.read_data(
         nrows=nrows,
         valid_rows=kwargs.get('valid_rows', 0))
+
+    filters = {
+        'nom_9': [0.0000001, 7, 58]
+    }
 
     encoder = steps.Encoder(
         ordinal_features=ordinal_features,
@@ -48,10 +50,9 @@ def submit_1(**kwargs):
 
     estimator = LogisticRegression(
         random_state=2020,
-        C=0.054,
-        class_weight={0: 1, 1: 2.01},
+        C=0.049,
+        class_weight={0: 1, 1: 1.42},
         solver='liblinear',
-        tol=1e-4,
         max_iter=2020,
         fit_intercept=True,
         penalty='l2',

@@ -83,19 +83,23 @@ class Encoder(BaseEstimator, TransformerMixin):
             _x = self.correct_nom_7(_x)
 
         features = self.get_features(_x.columns)
+
         _x = self.target_encoding(_x, self.nominal_features, na_value=na_value)
 
         ordinal_features = [f for f in features
                             if f in self.ordinal_features and f not in self.cardinal_features]
         _x = self.encode_ordinal(_x, ordinal_features, na_value)
 
-#        for feature in self.filters.keys():
-#            _x = self.filter_feature(_x, feature, self.filters[feature])
+        for feature in self.filters:
+            if len(self.filters[feature]) == 3:
+                _x = self.filter_feature(_x, feature, self.filters[feature][2])
 
         for feature in self.cardinal_features:
             if feature in self.filters:
-                _x = self.binning(_x, [feature], eps=self.filters[feature][0], precision=self.filters[feature][1])
-            else:
+                if self.filters[feature][0] is not None:
+                    _x = self.binning(_x, [feature], eps=self.filters[feature][0], precision=self.filters[feature][1])
+
+            if 'n_groups' in self.cardinal_encoding[feature]:
                 cv = self.cardinal_encoding[feature]['cv']
                 n_groups = self.cardinal_encoding[feature]['n_groups']
 
@@ -105,6 +109,16 @@ class Encoder(BaseEstimator, TransformerMixin):
                     _x = self.group_features(_x, [feature], n_groups=n_groups)
 
 #        _x = self.target_encoding(_x, self.cardinal_features, na_value=na_value, x_ref=x.copy())
+
+        for feature in features:
+            if self.handle_missing:
+                if (feature not in self.ordinal_features) and (feature in x.columns):
+                    _x.loc[x[feature].isna(), feature] = na_value
+            _x.loc[_x[feature].isna(), feature] = -1
+
+            if feature in self.ordinal_features:
+                if self.log_alpha > 0:
+                    _x[feature] = np.log(self.log_alpha + _x[feature])
 
         if self.verbose:
             logger.info(f'na_value: {na_value:.5f}')
@@ -122,15 +136,6 @@ class Encoder(BaseEstimator, TransformerMixin):
             logger.info('amount of unique values')
             for feature in features:
                 logger.info(f'{feature}: {_x[feature].nunique()}')
-
-        for feature in features:
-            if self.handle_missing:
-                if (feature not in self.ordinal_features) and (feature in x.columns):
-                    _x.loc[x[feature].isna(), feature] = na_value
-            _x.loc[_x[feature].isna(), feature] = -1
-
-            if self.log_alpha > 0:
-                _x[feature] = np.log(self.log_alpha + _x[feature])
 
         assert _x[features].isnull().sum().sum() == 0
 
@@ -267,7 +272,7 @@ class Encoder(BaseEstimator, TransformerMixin):
 
                 p_min = encoding['count'].iloc[first]
                 p_max = encoding['count'].iloc[-1]
-                encoding.loc[encoding.index == -1, 'count'] = p_min + nan_pos * (p_max - p_min)
+                encoding.loc[encoding.index == -1, 'count'] = (p_min + nan_pos * (p_max - p_min))
                 encoding['count'] = (encoding['count'] - p_min) / (p_max - p_min)
 
                 x[feature] = x[feature].map(encoding['count'].to_dict())
@@ -376,34 +381,34 @@ class Encoder(BaseEstimator, TransformerMixin):
 
         return x
 
-    def filter_feature(self, x, feature, filter_):
+    def filter_feature(self, x, feature, na_count=0):
         mask = x['target'] > -1
 
         stat = x[mask].groupby(feature)['target'].agg(['count', 'mean'])
 
-        na_filter = list(stat[stat['count'] < filter_[0]].index)
+        na_filter = list(stat[stat['count'] < na_count].index)
         mask_na = x[feature].isin(na_filter)
+        x.loc[mask_na, feature] = np.nan
 
-        filtered = list(stat[stat['mean'] < filter_[2]].index)
-        mask_low = x[feature].isin(filtered)
+#        filtered = list(stat[stat['mean'] < filter_[2]].index)
+#        mask_low = x[feature].isin(filtered)
 
-        filtered = list(stat[stat['mean'] > filter_[3]].index)
-        mask_high = x[feature].isin(filtered)
+#        filtered = list(stat[stat['mean'] > filter_[3]].index)
+#        mask_high = x[feature].isin(filtered)
 
-        if x[feature].dtype == 'object':
-            x.loc[mask_na, feature] = 'nan'
-            x.loc[~mask_na & mask_low, feature] = 'low'
-            x.loc[~mask_na & mask_high, feature] = 'high'
-        else:
-            x.loc[mask_na, feature] = -1
-            x.loc[~mask_na & mask_low, feature] = -2
-            x.loc[~mask_na & mask_high, feature] = -3
+#        if x[feature].dtype == 'object':
+#            x.loc[mask_na, feature] = 'nan'
+#            x.loc[~mask_na & mask_low, feature] = 'low'
+#            x.loc[~mask_na & mask_high, feature] = 'high'
+#        else:
+#            x.loc[mask_na, feature] = -1
+#            x.loc[~mask_na & mask_low, feature] = -2
+#            x.loc[~mask_na & mask_high, feature] = -3
 
-        if self.verbose:
-            logger.info(
-                f'{feature}: {mask_na.sum()} na, '
-                f'{(~mask_na & mask_low).sum()} low, '
-                f'{(~mask_na & mask_high).sum()} high')
+#        if self.verbose:
+        logger.info(f'{feature}: {mask_na.sum()} na')
+#                f'{(~mask_na & mask_low).sum()} low, '
+#                f'{(~mask_na & mask_high).sum()} high')
 
         return x
 
@@ -418,7 +423,9 @@ class BayesSearch(BaseEstimator, TransformerMixin):
         def _evaluate(trial):
             ordinal_features = ['ord_4', 'ord_5']
 
-            filters = {'nom_9': [0.0000001, 7]}
+            filters = {
+                'nom_9': [0.0000001, 7, 29]
+            }
 
             cardinal_encoding = dict()
             cardinal_encoding['nom_6'] = dict()
@@ -430,7 +437,7 @@ class BayesSearch(BaseEstimator, TransformerMixin):
             correct_features = {
                 'ord_4': False,
                 'ord_5': False,
-                'day': True,
+                'day': False,
                 'nom_7': False
             }
 
@@ -446,8 +453,8 @@ class BayesSearch(BaseEstimator, TransformerMixin):
 
             estimator = LogisticRegression(
                 random_state=2020,
-                C=0.054,
-                class_weight={0: 1, 1: 2.01},
+                C=0.049,
+                class_weight={0: 1, 1: 1.42},
                 solver='liblinear',
                 max_iter=2020,
                 fit_intercept=True,
