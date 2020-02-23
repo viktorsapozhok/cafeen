@@ -21,7 +21,7 @@ from sklearn.base import (
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
-from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from cafeen import utils
 
@@ -113,7 +113,8 @@ class Encoder(BaseEstimator, TransformerMixin):
         for feature in features:
             if self.handle_missing:
                 if (feature not in self.ordinal_features) and (feature in x.columns):
-                    _x.loc[x[feature].isna(), feature] = na_value
+#                    _x.loc[x[feature].isna(), feature] = na_value
+                    _x.loc[x[feature].isna(), feature] = -1
             _x.loc[_x[feature].isna(), feature] = -1
 
             if feature in self.ordinal_features:
@@ -151,6 +152,7 @@ class Encoder(BaseEstimator, TransformerMixin):
             ordinal_features = [f for f in features if f not in ohe_features]
 
             encoder = OneHotEncoder(sparse=True)
+#            encoder = OneHotEncoder(sparse=True, drop='first')
             encoder.fit(_x[ohe_features])
             del _x
             gc.collect()
@@ -405,8 +407,8 @@ class Encoder(BaseEstimator, TransformerMixin):
 #            x.loc[~mask_na & mask_low, feature] = -2
 #            x.loc[~mask_na & mask_high, feature] = -3
 
-#        if self.verbose:
-        logger.info(f'{feature}: {mask_na.sum()} na')
+        if self.verbose:
+            logger.info(f'{feature}: {mask_na.sum()} na')
 #                f'{(~mask_na & mask_low).sum()} low, '
 #                f'{(~mask_na & mask_high).sum()} high')
 
@@ -453,8 +455,8 @@ class BayesSearch(BaseEstimator, TransformerMixin):
 
             estimator = LogisticRegression(
                 random_state=2020,
-                C=0.049,
-                class_weight={0: 1, 1: 1.42},
+                C=0.044,
+                class_weight={0: 1, 1: 1.692},
                 solver='liblinear',
                 max_iter=2020,
                 fit_intercept=True,

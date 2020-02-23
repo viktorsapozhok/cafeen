@@ -27,6 +27,7 @@ def get_features(features):
 def read_data(nrows=None, valid_rows=0):
     logger.info('reading train')
     train = pd.read_csv(config.path_to_train, nrows=nrows)
+    train = train.drop(columns=['bin_3'])
 
     if valid_rows > 0:
         train, test, train_y, test_y = train_test_split(
@@ -49,6 +50,7 @@ def read_data(nrows=None, valid_rows=0):
         logger.info('reading test')
         test = pd.read_csv(config.path_to_test, nrows=nrows)
         test['target'] = -1
+        test = test.drop(columns=['bin_3'])
 
         return pd.concat([train, test]), None
 
