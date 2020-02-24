@@ -70,12 +70,15 @@ class Encoder(BaseEstimator, TransformerMixin):
         _x = x.copy()
         na_value = self.get_na_value(x)
 
-        _x['ord_4_'] = 0
-        _x.loc[_x['ord_4'] == 'G', 'ord_4_'] = 1
-        _x.loc[_x['ord_4'] == 'L', 'ord_4_'] = 2
-        _x.loc[_x['ord_4'] == 'S', 'ord_4_'] = 3
-        _x.loc[_x['ord_4'] == 'Z', 'ord_4_'] = 4
-        self.nominal_features += ['ord_4_']
+        _x.loc[_x['day'] == 5, 'day'] = 3
+        _x.loc[_x['day'] == 6, 'day'] = 2
+        _x.loc[_x['day'] == 7, 'day'] = 1
+
+        _x.loc[_x['nom_1'] == 'Square', 'nom_1'] = 'Triangle'
+        _x.loc[_x['nom_4'] == 'Oboe', 'nom_4'] = 'Theremin'
+        _x.loc[_x['ord_0'].isna(), 'ord_0'] = 2
+        _x.loc[_x['month'] == 10, 'month'] = 12
+        _x.loc[_x['month'] == 7, 'month'] = 9
 
 #        _x['ord_5'] = x['ord_5'].str[0]
 #        _x.loc[x['ord_5'].isna(), 'ord_5'] = np.nan
@@ -462,8 +465,8 @@ class BayesSearch(BaseEstimator, TransformerMixin):
 
             estimator = LogisticRegression(
                 random_state=2020,
-                C=0.044,
-                class_weight={0: 1, 1: 1.692},
+                C=0.049,
+                class_weight={0: 1, 1: 1.42},
                 solver='liblinear',
                 max_iter=2020,
                 fit_intercept=True,

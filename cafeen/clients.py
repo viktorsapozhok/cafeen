@@ -19,7 +19,7 @@ def submit_1(**kwargs):
     nrows = kwargs.get('nrows', None)
     verbose = kwargs.get('verbose', False)
 
-    ordinal_features = ['ord_4', 'ord_5', 'ord_3']
+    ordinal_features = ['ord_4', 'ord_5']
 
     cardinal_encoding = dict()
     cardinal_encoding['nom_6'] = dict()
@@ -34,7 +34,7 @@ def submit_1(**kwargs):
         valid_rows=kwargs.get('valid_rows', 0))
 
     filters = {
-        'nom_9': [0.0000001, 7, 29]
+        'nom_9': [0.0000001, 7, 58]
     }
 
     encoder = steps.Encoder(
@@ -51,8 +51,8 @@ def submit_1(**kwargs):
 
     estimator = LogisticRegression(
         random_state=2020,
-        C=0.044,
-        class_weight={0: 1, 1: 1.692},
+        C=0.049,
+        class_weight={0: 1, 1: 1.42},
         solver='liblinear',
         max_iter=2020,
         fit_intercept=True,
