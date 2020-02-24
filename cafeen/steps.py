@@ -70,6 +70,13 @@ class Encoder(BaseEstimator, TransformerMixin):
         _x = x.copy()
         na_value = self.get_na_value(x)
 
+        _x['ord_4_'] = 0
+        _x.loc[_x['ord_4'] == 'G', 'ord_4_'] = 1
+        _x.loc[_x['ord_4'] == 'L', 'ord_4_'] = 2
+        _x.loc[_x['ord_4'] == 'S', 'ord_4_'] = 3
+        _x.loc[_x['ord_4'] == 'Z', 'ord_4_'] = 4
+        self.nominal_features += ['ord_4_']
+
 #        _x['ord_5'] = x['ord_5'].str[0]
 #        _x.loc[x['ord_5'].isna(), 'ord_5'] = np.nan
 

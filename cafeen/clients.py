@@ -19,7 +19,7 @@ def submit_1(**kwargs):
     nrows = kwargs.get('nrows', None)
     verbose = kwargs.get('verbose', False)
 
-    ordinal_features = ['ord_4', 'ord_5']
+    ordinal_features = ['ord_4', 'ord_5', 'ord_3']
 
     cardinal_encoding = dict()
     cardinal_encoding['nom_6'] = dict()
@@ -34,7 +34,7 @@ def submit_1(**kwargs):
         valid_rows=kwargs.get('valid_rows', 0))
 
     filters = {
-        'nom_9': [0.0000001, 7, 57]
+        'nom_9': [0.0000001, 7, 29]
     }
 
     encoder = steps.Encoder(
