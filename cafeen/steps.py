@@ -67,18 +67,20 @@ class Encoder(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, x):
+        x.loc[x['day'] == 5, 'day'] = 3
+        x.loc[x['day'] == 6, 'day'] = 2
+        x.loc[x['day'] == 7, 'day'] = 1
+
+        x.loc[x['nom_1'] == 'Square', 'nom_1'] = 'Triangle'
+        x.loc[x['nom_4'] == 'Oboe', 'nom_4'] = 'Theremin'
+        x.loc[x['ord_0'].isna(), 'ord_0'] = 2
+        x.loc[x['month'] == 10, 'month'] = 12
+        x.loc[x['month'] == 7, 'month'] = 9
+
+        x.loc[x['ord_1'].isna(), 'ord_1'] = 'Expert'
+
         _x = x.copy()
         na_value = self.get_na_value(x)
-
-        _x.loc[_x['day'] == 5, 'day'] = 3
-        _x.loc[_x['day'] == 6, 'day'] = 2
-        _x.loc[_x['day'] == 7, 'day'] = 1
-
-        _x.loc[_x['nom_1'] == 'Square', 'nom_1'] = 'Triangle'
-        _x.loc[_x['nom_4'] == 'Oboe', 'nom_4'] = 'Theremin'
-        _x.loc[_x['ord_0'].isna(), 'ord_0'] = 2
-        _x.loc[_x['month'] == 10, 'month'] = 12
-        _x.loc[_x['month'] == 7, 'month'] = 9
 
 #        _x['ord_5'] = x['ord_5'].str[0]
 #        _x.loc[x['ord_5'].isna(), 'ord_5'] = np.nan
