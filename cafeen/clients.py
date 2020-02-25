@@ -34,7 +34,7 @@ def submit_1(**kwargs):
         valid_rows=kwargs.get('valid_rows', 0))
 
     filters = {
-        'nom_9': [0.0000001, 7, 29]
+        'nom_9': [0.0000001, 7, 58]
     }
 
     encoder = steps.Encoder(
