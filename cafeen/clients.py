@@ -19,7 +19,9 @@ def submit_1(**kwargs):
     nrows = kwargs.get('nrows', None)
     verbose = kwargs.get('verbose', False)
 
-    ordinal_features = ['ord_4', 'ord_5']
+    ordinal_features = ['ord_4', 'ord_5', 'ord_0', 'ord_1',
+                        'bin_0', 'bin_1', 'bin_2', 'bin_4',
+                        'nom_0', 'nom_4', 'nom_3']
 
     cardinal_encoding = dict()
     cardinal_encoding['nom_6'] = dict()
@@ -81,7 +83,7 @@ def submit_4(**kwargs):
     train = train.drop(columns=['bin_3'])
 
     bs = steps.BayesSearch(
-        n_trials=500,
+        n_trials=kwargs.get('trials'),
         n_folds=kwargs.get('folds'),
         verbose=kwargs.get('verbose'))
 

@@ -77,11 +77,13 @@ class Encoder(BaseEstimator, TransformerMixin):
         x.loc[x['month'] == 10, 'month'] = 12
         x.loc[x['month'] == 7, 'month'] = 9
 
+        x['ord_1'] = x['ord_1'].map({
+            'Novice': 1, 'Contributor': 2, 'Expert': 3, 'Master': 4, 'Grandmaster': 5})
+#        x['ord_2'] = x['ord_2'].map({
+#            'Freezing': 1, 'Cold': 2, 'Warm': 3, 'Hot': 4, 'Boiling Hot': 5, 'Lava Hot': 6})
+
         _x = x.copy()
         na_value = self.get_na_value(x)
-
-#        _x['ord_5'] = x['ord_5'].str[0]
-#        _x.loc[x['ord_5'].isna(), 'ord_5'] = np.nan
 
         if self.correct_features['ord_4']:
             _x = self.correct_ord_4(_x)
@@ -107,7 +109,9 @@ class Encoder(BaseEstimator, TransformerMixin):
         for feature in self.cardinal_features:
             if feature in self.filters:
                 if self.filters[feature][0] is not None:
-                    _x = self.binning(_x, [feature], eps=self.filters[feature][0], precision=self.filters[feature][1])
+                    _x = self.binning(_x, [feature],
+                                      eps=self.filters[feature][0],
+                                      precision=self.filters[feature][1])
 
             if 'n_groups' in self.cardinal_encoding[feature]:
                 cv = self.cardinal_encoding[feature]['cv']
@@ -257,37 +261,39 @@ class Encoder(BaseEstimator, TransformerMixin):
         train = x[x['target'] > -1].reset_index(drop=True)
 
         for feature in features:
-            x.loc[x[feature].isna(), feature] = -1
-            train.loc[train[feature].isna(), feature] = -1
-
-            if feature in ['ord_0', 'ord_1', 'ord_2']:
-                p_min = train.groupby(feature)['target'].mean().min()
-                p_max = train.groupby(feature)['target'].mean().max()
-                encoding = train.groupby(feature)['target'].mean()
-                encoding.iloc[0] = na_value
-
-                encoding = (encoding - p_min) / (p_max - p_min)
-
-                x[feature] = x[feature].map(encoding.to_dict())
-            else:
+            if 'ord_' not in feature:
+                x.loc[x[feature].isna(), feature] = -1
+                train.loc[train[feature].isna(), feature] = -1
                 encoding = train.groupby(feature)['target'].agg(['mean', 'count'])
-                first = 1
+                encoding['count'] = encoding['mean'].values
+                encoding.loc[encoding.index == -1, 'count'] = na_value
+                encoding['count'] = (encoding['count'] - encoding['count'].min()) / \
+                                    (encoding['count'].max() - encoding['count'].min())
+            else:
+                if x[feature].isna().sum() > 0:
+                    x.loc[x[feature].isna(), feature] = -1
+                    train.loc[train[feature].isna(), feature] = -1
 
-                if feature in ['nom_7', 'nom_8']:
-                    encoding = encoding.sort_values(by='mean')
-                    first = 0
+                    encoding = train.groupby(feature)['target'].agg(['mean', 'count'])
+                    encoding['count'] = list(range(len(encoding)))
 
-                encoding['count'] = list(range(len(encoding)))
+                    nan_pos = (na_value - encoding['mean'].min()) / \
+                              (encoding['mean'].max() - encoding['mean'].min())
 
-                nan_pos = (na_value - encoding['mean'].iloc[first]) / \
-                          (encoding['mean'].iloc[-1] - encoding['mean'].iloc[first])
+                    p_min = encoding['count'].iloc[1]
+                    p_max = encoding['count'].iloc[-1]
+                    encoding.loc[encoding.index == -1, 'count'] = p_min + nan_pos * (p_max - p_min)
+                    encoding['count'] = (encoding['count'] - p_min) / (p_max - p_min)
+                else:
+                    encoding = train.groupby(feature)['target'].agg(['mean', 'count'])
+                    encoding['count'] = list(range(len(encoding)))
 
-                p_min = encoding['count'].iloc[first]
-                p_max = encoding['count'].iloc[-1]
-                encoding.loc[encoding.index == -1, 'count'] = (p_min + nan_pos * (p_max - p_min))
-                encoding['count'] = (encoding['count'] - p_min) / (p_max - p_min)
+                    p_min = encoding['count'].iloc[0]
+                    p_max = encoding['count'].iloc[-1]
+                    encoding['count'] = (encoding['count'] - p_min) / (p_max - p_min)
 
-                x[feature] = x[feature].map(encoding['count'].to_dict())
+            x[feature] = x[feature].map(encoding['count'].to_dict())
+            x[feature] = (x[feature] - x[feature].mean()) / x[feature].std()
 
         return x
 
@@ -326,34 +332,26 @@ class Encoder(BaseEstimator, TransformerMixin):
 
         return x
 
-    def target_encoding_cv(self, x, features, cv, n_rounds=1, na_value=None):
+    def target_encoding_cv(self, x, features, cv, na_value=None):
         train, test = utils.split_data(x)
         del x
 
         train = train.sort_index()
-        encoded = []
+        encoded = pd.DataFrame()
 
-        for _iter in range(n_rounds):
+        for fold, (train_index, valid_index) in enumerate(
+                cv.split(train[features], train['target'])):
             if self.verbose:
-                logger.debug(f'iteration {_iter + 1}')
+                logger.info(f'target encoding on fold {fold + 1}')
 
-            _encoded = pd.DataFrame()
+            encoder = TargetEncoder(na_value=na_value)
 
-            for fold, (train_index, valid_index) in enumerate(
-                    cv.split(train[features], train['target'])):
-                if self.verbose:
-                    logger.info(f'target encoding on fold {fold + 1}')
+            encoder.fit(train.iloc[train_index][features],
+                        train.iloc[train_index]['target'])
 
-                encoder = TargetEncoder(na_value=na_value)
-
-                encoder.fit(train.iloc[train_index][features],
-                            train.iloc[train_index]['target'])
-
-                _encoded = _encoded.append(
-                    encoder.transform(train.iloc[valid_index][features]),
-                    ignore_index=False)
-
-            encoded += [_encoded.sort_index()]
+            encoded = encoded.append(
+                encoder.transform(train.iloc[valid_index][features]),
+                ignore_index=False)
 
         encoder = TargetEncoder(na_value=na_value)
         encoder.fit(train[features], train['target'])
@@ -362,7 +360,7 @@ class Encoder(BaseEstimator, TransformerMixin):
         _test[features] = encoder.transform(test[features].copy())
 
         _train = train.copy()
-        _train[features] = pd.concat(encoded).groupby(level=0).mean()
+        _train[features] = encoded.groupby(level=0).mean()
 
         x = pd.concat([_train[test.columns], _test])
 
@@ -374,6 +372,7 @@ class Encoder(BaseEstimator, TransformerMixin):
 
         for feature in features:
             mask = x[feature] >= 0
+
             x.loc[mask, feature] = \
                 pd.qcut(x.loc[mask, feature], n_groups, labels=False, duplicates='drop')
 
@@ -433,7 +432,9 @@ class BayesSearch(BaseEstimator, TransformerMixin):
 
     def fit(self, x, y=None):
         def _evaluate(trial):
-            ordinal_features = ['ord_4', 'ord_5']
+            ordinal_features = ['ord_4', 'ord_5', 'ord_0', 'ord_1',
+                                'bin_0', 'bin_1', 'bin_2', 'bin_4',
+                                'nom_0', 'nom_4', 'nom_3']
 
             filters = {
                 'nom_9': [0.0000001, 7, 29]
