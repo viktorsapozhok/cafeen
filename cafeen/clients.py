@@ -36,7 +36,7 @@ def submit_1(**kwargs):
         valid_rows=kwargs.get('valid_rows', 0))
 
     filters = {
-        'nom_9': [0.0000001, 7, 58]
+        'nom_9': [0.0000001, 7, 29]
     }
 
     encoder = steps.Encoder(
@@ -51,30 +51,31 @@ def submit_1(**kwargs):
 
     train_x, train_y, test_x, test_id = encoder.fit_transform(df)
 
-    estimator = LogisticRegression(
-        random_state=2020,
-        C=0.049,
-        class_weight={0: 1, 1: 1.42},
-        solver='liblinear',
-        max_iter=2020,
-        fit_intercept=True,
-        penalty='l2',
-        verbose=1 * verbose)
+    for w in np.arange(1.2, 1.6, 0.05):
+        estimator = LogisticRegression(
+            random_state=2020,
+            C=0.049,
+            class_weight={0: 1, 1: w},
+            solver='liblinear',
+            max_iter=2020,
+            fit_intercept=True,
+            penalty='l2',
+            verbose=1 * verbose)
 
-    if valid_y is None:
-        submitter = steps.Submitter(estimator, config.path_to_data)
-    else:
-        submitter = steps.Submitter(estimator)
+        if valid_y is None:
+            submitter = steps.Submitter(estimator, config.path_to_data)
+        else:
+            submitter = steps.Submitter(estimator)
 
-    if isinstance(train_y, pd.Series):
-        train_y = train_y.values
+        if isinstance(train_y, pd.Series):
+            train_y = train_y.values
 
-    y_pred = submitter.fit(train_x, train_y).predict_proba(test_x, test_id=test_id)
+        y_pred = submitter.fit(train_x, train_y).predict_proba(test_x, test_id=test_id)
 
-    if valid_y is not None:
-        _valid_y = valid_y.merge(y_pred[['id', 'target']], how='left', on='id')
-        score = roc_auc_score(_valid_y['y_true'].values, _valid_y['target'].values)
-        logger.debug(f'score: {score:.6f}')
+        if valid_y is not None:
+            _valid_y = valid_y.merge(y_pred[['id', 'target']], how='left', on='id')
+            score = roc_auc_score(_valid_y['y_true'].values, _valid_y['target'].values)
+            logger.debug(f'{w:.2f}, score: {score:.6f}')
 
 
 def submit_4(**kwargs):
