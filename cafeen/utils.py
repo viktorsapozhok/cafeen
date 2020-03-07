@@ -59,9 +59,14 @@ def read_data(nrows=None, valid_rows=0, drop=True):
         return pd.concat([train, test]), None
 
 
-def split_data(df):
+def split_data(df, sample_weight=False):
     mask = df['target'] > -1
-    return df.loc[mask], df.loc[df['target'] == -1]
+
+    if not sample_weight:
+        return df.loc[mask], df.loc[df['target'] == -1]
+    else:
+        columns = [col for col in df.columns if col not in ['sample_weight']]
+        return df.loc[mask, columns], df.loc[df['target'] == -1, columns], df.loc[mask, 'sample_weight'].values
 
 
 def replace_na(df, features):

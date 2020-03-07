@@ -49,33 +49,34 @@ def submit_1(**kwargs):
         correct_features=correct_features,
         verbose=True)
 
-    train_x, train_y, test_x, test_id = encoder.fit_transform(df)
+    train_x, train_y, test_x, test_id, sample_weight = encoder.fit_transform(df)
 
-    for w in np.arange(1.2, 1.6, 0.05):
-        estimator = LogisticRegression(
-            random_state=2020,
-            C=0.049,
-            class_weight={0: 1, 1: w},
-            solver='liblinear',
-            max_iter=2020,
-            fit_intercept=True,
-            penalty='l2',
-            verbose=1 * verbose)
+    estimator = LogisticRegression(
+        random_state=2020,
+        C=0.049,
+        class_weight={0: 1, 1: 1.42},
+        solver='liblinear',
+        max_iter=2020,
+        fit_intercept=True,
+        penalty='l2',
+        verbose=1 * verbose)
 
-        if valid_y is None:
-            submitter = steps.Submitter(estimator, config.path_to_data)
-        else:
-            submitter = steps.Submitter(estimator)
+    if valid_y is None:
+        submitter = steps.Submitter(estimator, config.path_to_data)
+    else:
+        submitter = steps.Submitter(estimator)
 
-        if isinstance(train_y, pd.Series):
-            train_y = train_y.values
+    if isinstance(train_y, pd.Series):
+        train_y = train_y.values
 
-        y_pred = submitter.fit(train_x, train_y).predict_proba(test_x, test_id=test_id)
+    y_pred = submitter.fit(train_x, train_y, sample_weight=sample_weight).predict_proba(test_x, test_id=test_id)
 
-        if valid_y is not None:
-            _valid_y = valid_y.merge(y_pred[['id', 'target']], how='left', on='id')
-            score = roc_auc_score(_valid_y['y_true'].values, _valid_y['target'].values)
-            logger.debug(f'{w:.2f}, score: {score:.6f}')
+    if valid_y is not None:
+        _valid_y = valid_y.merge(y_pred[['id', 'target']], how='left', on='id')
+        score = roc_auc_score(_valid_y['y_true'].values, _valid_y['target'].values)
+        logger.debug(f'score: {score:.6f}')
+
+        return _valid_y
 
 
 def submit_4(**kwargs):

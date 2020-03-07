@@ -154,7 +154,9 @@ class Encoder(BaseEstimator, TransformerMixin):
 
         assert _x[features].isnull().sum().sum() == 0
 
-        _train, _test = utils.split_data(_x)
+        _x['sample_weight'] = 1
+        _x.loc[x['ord_2'] == 'Lava Hot', 'sample_weight'] = 1.2
+        _train, _test, sample_weight = utils.split_data(_x, sample_weight=True)
 
         _train_y = _train['target']
         _train_x = _train[features]
@@ -181,7 +183,7 @@ class Encoder(BaseEstimator, TransformerMixin):
             logger.info(f'train: {_train_x.shape}, test: {_test_x.shape}')
             logger.info('')
 
-        return _train_x, _train_y, _test_x, _test_id
+        return _train_x, _train_y, _test_x, _test_id, sample_weight
 
     def augment_train(self, x):
         features = self.get_features(x.columns)
@@ -294,6 +296,7 @@ class Encoder(BaseEstimator, TransformerMixin):
 
             x[feature] = x[feature].map(encoding['count'].to_dict())
             x[feature] = (x[feature] - x[feature].mean()) / x[feature].std()
+#            x[feature] = (x[feature] - x[feature].min()) / (x[feature].max() - x[feature].min())
 
         return x
 
