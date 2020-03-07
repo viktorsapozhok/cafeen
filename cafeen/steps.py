@@ -13,6 +13,7 @@ import numpy as np
 import optuna
 import pandas as pd
 from scipy import sparse
+import statsmodels.api as sm
 from sklearn.base import (
     BaseEstimator,
     ClassifierMixin,
@@ -154,9 +155,7 @@ class Encoder(BaseEstimator, TransformerMixin):
 
         assert _x[features].isnull().sum().sum() == 0
 
-        _x['sample_weight'] = 1
-        _x.loc[x['ord_2'] == 'Lava Hot', 'sample_weight'] = 1.2
-        _train, _test, sample_weight = utils.split_data(_x, sample_weight=True)
+        _train, _test = utils.split_data(_x)
 
         _train_y = _train['target']
         _train_x = _train[features]
@@ -183,7 +182,7 @@ class Encoder(BaseEstimator, TransformerMixin):
             logger.info(f'train: {_train_x.shape}, test: {_test_x.shape}')
             logger.info('')
 
-        return _train_x, _train_y, _test_x, _test_id, sample_weight
+        return _train_x, _train_y, _test_x, _test_id
 
     def augment_train(self, x):
         features = self.get_features(x.columns)
@@ -267,34 +266,53 @@ class Encoder(BaseEstimator, TransformerMixin):
                 x.loc[x[feature].isna(), feature] = -1
                 train.loc[train[feature].isna(), feature] = -1
                 encoding = train.groupby(feature)['target'].agg(['mean', 'count'])
-                encoding['count'] = encoding['mean'].values
-                encoding.loc[encoding.index == -1, 'count'] = na_value
-                encoding['count'] = (encoding['count'] - encoding['count'].min()) / \
-                                    (encoding['count'].max() - encoding['count'].min())
+
+#                encoding['count'] = encoding['mean'].values
+#                encoding.loc[encoding.index == -1, 'count'] = na_value
+
+                encoding.loc[encoding.index == -1, 'mean'] = na_value
             else:
                 if x[feature].isna().sum() > 0:
                     x.loc[x[feature].isna(), feature] = -1
                     train.loc[train[feature].isna(), feature] = -1
 
                     encoding = train.groupby(feature)['target'].agg(['mean', 'count'])
-                    encoding['count'] = list(range(len(encoding)))
+                    encoding['x'] = range(len(encoding))
 
-                    nan_pos = (na_value - encoding['mean'].min()) / \
-                              (encoding['mean'].max() - encoding['mean'].min())
+                    mask = (encoding.index != -1) & (encoding['count'] > encoding['count'].quantile(0.1))
+                    y = encoding.loc[mask, 'mean']
+                    X = sm.add_constant(encoding.loc[mask, 'x'])
+                    model = sm.OLS(y, X).fit()
+                    encoding['mean'] = model.predict(sm.add_constant(encoding['x']))
+                    encoding['mean'].iloc[0] = na_value
 
-                    p_min = encoding['count'].iloc[1]
-                    p_max = encoding['count'].iloc[-1]
-                    encoding.loc[encoding.index == -1, 'count'] = p_min + nan_pos * (p_max - p_min)
-                    encoding['count'] = (encoding['count'] - p_min) / (p_max - p_min)
+#                    encoding['count'] = list(range(len(encoding)))
+
+#                    nan_pos = (na_value - encoding['mean'].min()) / \
+#                              (encoding['mean'].max() - encoding['mean'].min())
+
+#                    p_min = encoding['count'].iloc[1]
+#                    p_max = encoding['count'].iloc[-1]
+#                    encoding.loc[encoding.index == -1, 'count'] = p_min + nan_pos * (p_max - p_min)
+#                    encoding['count'] = (encoding['count'] - p_min) / (p_max - p_min)
                 else:
                     encoding = train.groupby(feature)['target'].agg(['mean', 'count'])
-                    encoding['count'] = list(range(len(encoding)))
 
-                    p_min = encoding['count'].iloc[0]
-                    p_max = encoding['count'].iloc[-1]
-                    encoding['count'] = (encoding['count'] - p_min) / (p_max - p_min)
+                    y = encoding['mean']
+                    X = sm.add_constant(list(range(len(encoding))))
+                    model = sm.OLS(y, X).fit()
+                    encoding['mean'] = model.predict(X)
 
-            x[feature] = x[feature].map(encoding['count'].to_dict())
+#                    encoding['count'] = list(range(len(encoding)))
+
+#                    p_min = encoding['count'].iloc[0]
+#                    p_max = encoding['count'].iloc[-1]
+#                    encoding['count'] = (encoding['count'] - p_min) / (p_max - p_min)
+
+            encoding['mean'] = \
+                (encoding['mean'] - encoding['mean'].min()) / \
+                (encoding['mean'].max() - encoding['mean'].min())
+            x[feature] = x[feature].map(encoding['mean'].to_dict())
             x[feature] = (x[feature] - x[feature].mean()) / x[feature].std()
 #            x[feature] = (x[feature] - x[feature].min()) / (x[feature].max() - x[feature].min())
 
