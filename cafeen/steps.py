@@ -279,7 +279,11 @@ class Encoder(BaseEstimator, TransformerMixin):
                     encoding = train.groupby(feature)['target'].agg(['mean', 'count'])
                     encoding['x'] = range(len(encoding))
 
-                    mask = (encoding.index != -1) & (encoding['count'] > encoding['count'].quantile(0.1))
+                    q = 0
+                    if feature in ['ord_4', 'ord_5']:
+                        q = 0.1
+
+                    mask = (encoding.index != -1) & (encoding['count'] >= encoding['count'].quantile(q))
                     y = encoding.loc[mask, 'mean']
                     X = sm.add_constant(encoding.loc[mask, 'x'])
                     model = sm.OLS(y, X).fit()
