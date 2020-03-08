@@ -83,8 +83,16 @@ class Encoder(BaseEstimator, TransformerMixin):
 #        x['ord_2'] = x['ord_2'].map({
 #            'Freezing': 1, 'Cold': 2, 'Warm': 3, 'Hot': 4, 'Boiling Hot': 5, 'Lava Hot': 6})
 
-        _x = x.copy()
         na_value = self.get_na_value(x)
+
+        for feature in ['nom_8', 'ord_3']:
+            enc = x[x['target'] > -1].groupby(feature)['target'].mean()
+            x[feature + '_1'] = 0
+            x.loc[x[feature].isin(list(enc[enc > na_value].index)), feature + '_1'] = 1
+            x.loc[x[feature].isin(list(enc[enc < na_value].index)), feature + '_1'] = -1
+            x.loc[x[feature].isna(), feature + '_1'] = 0
+
+        _x = x.copy()
 
         if self.correct_features['ord_4']:
             _x = self.correct_ord_4(_x)
@@ -262,7 +270,7 @@ class Encoder(BaseEstimator, TransformerMixin):
         train = x[x['target'] > -1].reset_index(drop=True)
 
         for feature in features:
-            if 'ord_' not in feature:
+            if feature not in ['ord_0', 'ord_1', 'ord_2', 'ord_3', 'ord_4', 'ord_5']:
                 x.loc[x[feature].isna(), feature] = -1
                 train.loc[train[feature].isna(), feature] = -1
                 encoding = train.groupby(feature)['target'].agg(['mean', 'count'])
@@ -283,12 +291,29 @@ class Encoder(BaseEstimator, TransformerMixin):
                     if feature in ['ord_4', 'ord_5']:
                         q = 0.1
 
-                    mask = (encoding.index != -1) & (encoding['count'] >= encoding['count'].quantile(q))
-                    y = encoding.loc[mask, 'mean']
-                    X = sm.add_constant(encoding.loc[mask, 'x'])
-                    model = sm.OLS(y, X).fit()
-                    encoding['mean'] = model.predict(sm.add_constant(encoding['x']))
-                    encoding['mean'].iloc[0] = na_value
+                    if feature in ['ord_2', 'ord_3']:
+                        mask = (encoding.index != -1) & (encoding['count'] >= encoding['count'].quantile(q))
+                        y = encoding.loc[mask, 'mean']
+                        X = pd.DataFrame()
+                        X['id'] = encoding.loc[mask, 'x']
+                        X['id_2'] = encoding.loc[mask, 'x'] ** 2
+                        X = sm.add_constant(X)
+                        model = sm.OLS(y, X.values).fit()
+
+                        X_pred = pd.DataFrame()
+                        X_pred['id'] = encoding['x']
+                        X_pred['id_2'] = encoding['x'] ** 2
+                        X_pred = sm.add_constant(X_pred)
+                        encoding['mean'] = model.predict(X_pred.values)
+
+                        encoding['mean'].iloc[0] = na_value
+                    else:
+                        mask = (encoding.index != -1) & (encoding['count'] >= encoding['count'].quantile(q))
+                        y = encoding.loc[mask, 'mean']
+                        X = sm.add_constant(encoding.loc[mask, 'x'])
+                        model = sm.OLS(y, X).fit()
+                        encoding['mean'] = model.predict(sm.add_constant(encoding['x']))
+                        encoding['mean'].iloc[0] = na_value
 
 #                    encoding['count'] = list(range(len(encoding)))
 
@@ -457,9 +482,10 @@ class BayesSearch(BaseEstimator, TransformerMixin):
 
     def fit(self, x, y=None):
         def _evaluate(trial):
-            ordinal_features = ['ord_4', 'ord_5', 'ord_0', 'ord_1',
+            ordinal_features = ['ord_0', 'ord_1', 'ord_4', 'ord_5',
                                 'bin_0', 'bin_1', 'bin_2', 'bin_4',
-                                'nom_0', 'nom_4', 'nom_3']
+                                'nom_0', 'nom_3', 'nom_4',
+                                'nom_8_1', 'ord_3_1']
 
             filters = {
                 'nom_9': [0.0000001, 7, 29]

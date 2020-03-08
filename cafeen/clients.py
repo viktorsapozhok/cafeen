@@ -19,9 +19,10 @@ def submit_1(**kwargs):
     nrows = kwargs.get('nrows', None)
     verbose = kwargs.get('verbose', False)
 
-    ordinal_features = ['ord_4', 'ord_5', 'ord_0', 'ord_1',
+    ordinal_features = ['ord_0', 'ord_1', 'ord_4', 'ord_5',
                         'bin_0', 'bin_1', 'bin_2', 'bin_4',
-                        'nom_0', 'nom_4', 'nom_3']
+                        'nom_0', 'nom_3', 'nom_4',
+                        'nom_8_1', 'ord_3_1']
 
     cardinal_encoding = dict()
     cardinal_encoding['nom_6'] = dict()
