@@ -25,7 +25,6 @@ def get_features(features):
 
 
 def read_data(nrows=None, valid_rows=0, drop=True):
-    logger.info('reading train')
     train = pd.read_csv(config.path_to_train, nrows=nrows)
 
     if drop:

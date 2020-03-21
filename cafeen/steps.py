@@ -77,6 +77,8 @@ class Encoder(BaseEstimator, TransformerMixin):
         x.loc[x['ord_1'].isna(), 'ord_1'] = 'Expert'
         x.loc[x['month'] == 10, 'month'] = 12
         x.loc[x['month'] == 7, 'month'] = 9
+        x.loc[x['month'] == 6, 'month'] = 12
+        x.loc[x['month'].isna(), 'month'] = 8
 
         x['ord_1'] = x['ord_1'].map({
             'Novice': 1, 'Contributor': 2, 'Expert': 3, 'Master': 4, 'Grandmaster': 5})
@@ -131,12 +133,12 @@ class Encoder(BaseEstimator, TransformerMixin):
                 if n_groups > 0:
                     _x = self.group_features(_x, [feature], n_groups=n_groups)
 
-#        _x = self.target_encoding(_x, self.cardinal_features, na_value=na_value, x_ref=x.copy())
-
         for feature in features:
+            if feature == 'month':
+                continue
+
             if self.handle_missing:
                 if (feature not in self.ordinal_features) and (feature in x.columns):
-#                    _x.loc[x[feature].isna(), feature] = na_value
                     _x.loc[x[feature].isna(), feature] = -1
             _x.loc[_x[feature].isna(), feature] = -1
 
@@ -270,73 +272,37 @@ class Encoder(BaseEstimator, TransformerMixin):
         train = x[x['target'] > -1].reset_index(drop=True)
 
         for feature in features:
-            if feature not in ['ord_0', 'ord_1', 'ord_2', 'ord_3', 'ord_4', 'ord_5']:
+            if feature in ['ord_4', 'ord_5']:
+                x.loc[x[feature].isna(), feature] = -1
+                train.loc[train[feature].isna(), feature] = -1
+
+                encoding = train.groupby(feature)['target'].agg(['mean', 'count'])
+                encoding['x'] = range(len(encoding))
+
+                q = 0
+                if feature == 'ord_4':
+                    q = 0.2
+                if feature == 'ord_5':
+                    q = 0.1
+
+                mask = (encoding.index != -1) & (encoding['count'] >= encoding['count'].quantile(q))
+                y = encoding.loc[mask, 'mean']
+                X = sm.add_constant(encoding.loc[mask, 'x'])
+                model = sm.OLS(y, X).fit()
+                encoding['mean'] = model.predict(sm.add_constant(encoding['x']))
+                encoding.loc[encoding.index == -1, 'mean'] = na_value
+            elif feature in ['ord_0', 'ord_1']:
+                encoding = train.groupby(feature)['target'].agg(['mean', 'count'])
+
+                y = encoding['mean']
+                X = sm.add_constant(list(range(len(encoding))))
+                model = sm.OLS(y, X).fit()
+                encoding['mean'] = model.predict(X)
+            else:
                 x.loc[x[feature].isna(), feature] = -1
                 train.loc[train[feature].isna(), feature] = -1
                 encoding = train.groupby(feature)['target'].agg(['mean', 'count'])
-
-#                encoding['count'] = encoding['mean'].values
-#                encoding.loc[encoding.index == -1, 'count'] = na_value
-
                 encoding.loc[encoding.index == -1, 'mean'] = na_value
-            else:
-                if x[feature].isna().sum() > 0:
-                    x.loc[x[feature].isna(), feature] = -1
-                    train.loc[train[feature].isna(), feature] = -1
-
-                    encoding = train.groupby(feature)['target'].agg(['mean', 'count'])
-                    encoding['x'] = range(len(encoding))
-
-                    q = 0
-                    if feature in ['ord_4', 'ord_5']:
-                        q = 0.1
-
-                    if feature in ['ord_2', 'ord_3']:
-                        mask = (encoding.index != -1) & (encoding['count'] >= encoding['count'].quantile(q))
-                        y = encoding.loc[mask, 'mean']
-                        X = pd.DataFrame()
-                        X['id'] = encoding.loc[mask, 'x']
-                        X['id_2'] = encoding.loc[mask, 'x'] ** 2
-                        X = sm.add_constant(X)
-                        model = sm.OLS(y, X.values).fit()
-
-                        X_pred = pd.DataFrame()
-                        X_pred['id'] = encoding['x']
-                        X_pred['id_2'] = encoding['x'] ** 2
-                        X_pred = sm.add_constant(X_pred)
-                        encoding['mean'] = model.predict(X_pred.values)
-
-                        encoding['mean'].iloc[0] = na_value
-                    else:
-                        mask = (encoding.index != -1) & (encoding['count'] >= encoding['count'].quantile(q))
-                        y = encoding.loc[mask, 'mean']
-                        X = sm.add_constant(encoding.loc[mask, 'x'])
-                        model = sm.OLS(y, X).fit()
-                        encoding['mean'] = model.predict(sm.add_constant(encoding['x']))
-                        encoding['mean'].iloc[0] = na_value
-
-#                    encoding['count'] = list(range(len(encoding)))
-
-#                    nan_pos = (na_value - encoding['mean'].min()) / \
-#                              (encoding['mean'].max() - encoding['mean'].min())
-
-#                    p_min = encoding['count'].iloc[1]
-#                    p_max = encoding['count'].iloc[-1]
-#                    encoding.loc[encoding.index == -1, 'count'] = p_min + nan_pos * (p_max - p_min)
-#                    encoding['count'] = (encoding['count'] - p_min) / (p_max - p_min)
-                else:
-                    encoding = train.groupby(feature)['target'].agg(['mean', 'count'])
-
-                    y = encoding['mean']
-                    X = sm.add_constant(list(range(len(encoding))))
-                    model = sm.OLS(y, X).fit()
-                    encoding['mean'] = model.predict(X)
-
-#                    encoding['count'] = list(range(len(encoding)))
-
-#                    p_min = encoding['count'].iloc[0]
-#                    p_max = encoding['count'].iloc[-1]
-#                    encoding['count'] = (encoding['count'] - p_min) / (p_max - p_min)
 
             encoding['mean'] = \
                 (encoding['mean'] - encoding['mean'].min()) / \

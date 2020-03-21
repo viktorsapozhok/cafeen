@@ -48,7 +48,7 @@ def submit_1(**kwargs):
         log_alpha=0,
         one_hot_encoding=True,
         correct_features=correct_features,
-        verbose=True)
+        verbose=False)
 
     train_x, train_y, test_x, test_id = encoder.fit_transform(df)
 
