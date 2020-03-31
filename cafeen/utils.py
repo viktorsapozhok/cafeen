@@ -1,4 +1,5 @@
 import logging
+import pickle
 import random
 import warnings
 
@@ -24,7 +25,7 @@ def get_features(features):
     return [feat for feat in features if feat not in ['id', 'target']]
 
 
-def read_data(nrows=None, valid_rows=0, drop=True):
+def read_data(nrows=None, valid_rows=0, drop=True, seed=2020):
     train = pd.read_csv(config.path_to_train, nrows=nrows)
 
     if drop:
@@ -36,7 +37,8 @@ def read_data(nrows=None, valid_rows=0, drop=True):
             train['target'],
             test_size=valid_rows/len(train),
             shuffle=True,
-            random_state=2020,
+            random_state=seed,
+#            random_state=2020,
             stratify=train['target'])
 
         test['target'] = -1
@@ -376,3 +378,14 @@ def eval_weights(train, features):
     )
 
     show_weights(expl)
+
+
+def to_pickle(df, path_to):
+    with open(path_to, 'wb') as fh:
+        pickle.dump(df, fh)
+
+
+def from_pickle(path_to):
+    with open(path_to, 'rb') as fh:
+        df = pickle.load(fh)
+    return df

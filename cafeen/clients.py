@@ -22,7 +22,8 @@ def submit_1(**kwargs):
     ordinal_features = ['ord_0', 'ord_1', 'ord_4', 'ord_5',
                         'bin_0', 'bin_1', 'bin_2', 'bin_4',
                         'nom_0', 'nom_3', 'nom_4',
-                        'nom_8_1', 'ord_3_1']
+                        'nom_8_1', 'ord_3_1', 'ord_2_1',
+                        'nom_1_1', 'nom_2_1']
 
     cardinal_encoding = dict()
     cardinal_encoding['nom_6'] = dict()
@@ -30,14 +31,17 @@ def submit_1(**kwargs):
     cardinal_encoding['nom_6']['n_groups'] = 3
     cardinal_encoding['nom_9'] = dict()
 
-    correct_features = {'ord_4': False, 'ord_5': False, 'day': False, 'nom_7': False}
-
+#    for s in [95, 98, 102, 105]:
+#        scores = []
+#    for seed in [0, 1, 2, 2020]:
     df, valid_y = utils.read_data(
         nrows=nrows,
-        valid_rows=kwargs.get('valid_rows', 0))
+        valid_rows=kwargs.get('valid_rows', 0),
+        seed=2020)
 
     filters = {
-        'nom_9': [0.0000001, 7, 29]
+        'nom_6': [90],
+        'nom_9': [0.0000001, 7, 52, 0.1],
     }
 
     encoder = steps.Encoder(
@@ -47,8 +51,7 @@ def submit_1(**kwargs):
         handle_missing=True,
         log_alpha=0,
         one_hot_encoding=True,
-        correct_features=correct_features,
-        verbose=False)
+        verbose=verbose)
 
     train_x, train_y, test_x, test_id = encoder.fit_transform(df)
 
@@ -75,7 +78,13 @@ def submit_1(**kwargs):
     if valid_y is not None:
         _valid_y = valid_y.merge(y_pred[['id', 'target']], how='left', on='id')
         score = roc_auc_score(_valid_y['y_true'].values, _valid_y['target'].values)
-        logger.debug(f'score: {score:.6f}')
+        logger.info(f'score: {score:.6f}')
+#                scores += [score]
+#        logger.debug(f'score: {np.mean(scores):.6f}')
+#        logger.info('')
+#        except KeyboardInterrupt:
+#            logger.info('')
+#            continue
 
 
 def submit_4(**kwargs):

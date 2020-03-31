@@ -3,15 +3,11 @@ from setuptools import setup
 SHORT_DESCRIPTION = ''
 
 DEPENDENCIES = [
+    'click==7.1.1',
     'colorlog',
-    'category-encoders==2.1.0',
-    'eli5==0.10.1',
-    'fire==0.2.1',
-    'lightgbm==2.3.1',
-    'optuna==1.0.0',
-    'pandas==0.25.3',
-    'scikit-learn==0.22.1',
-    'tqdm'
+    'optuna==1.2.0',
+    'pandas==1.0.3',
+    'scikit-learn>=0.22.0',
 ]
 
 ENTRY_POINTS = {

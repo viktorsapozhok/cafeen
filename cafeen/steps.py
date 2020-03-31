@@ -24,7 +24,7 @@ from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-from cafeen import utils
+from cafeen import utils, config
 
 optuna.logging.set_verbosity(optuna.logging.ERROR)
 logger = logging.getLogger('cafeen')
@@ -39,13 +39,11 @@ class Encoder(BaseEstimator, TransformerMixin):
             handle_missing=True,
             log_alpha=0.1,
             one_hot_encoding=True,
-            correct_features=None,
             verbose=True
     ):
         self.cardinal_encoding = cardinal_encoding
         self.handle_missing = handle_missing
         self.filters = filters
-        self.correct_features = correct_features
         self.log_alpha = log_alpha
         self.one_hot_encoding = one_hot_encoding
         self.verbose = verbose
@@ -68,13 +66,14 @@ class Encoder(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, x):
+#        x['nans'] = x.isnull().sum(axis=1)
         x.loc[x['day'] == 5, 'day'] = 3
         x.loc[x['day'] == 6, 'day'] = 2
         x.loc[x['day'] == 7, 'day'] = 1
         x.loc[x['nom_1'] == 'Square', 'nom_1'] = 'Triangle'
         x.loc[x['nom_4'] == 'Oboe', 'nom_4'] = 'Theremin'
         x.loc[x['ord_0'].isna(), 'ord_0'] = 2
-        x.loc[x['ord_1'].isna(), 'ord_1'] = 'Expert'
+#        x.loc[x['ord_1'].isna(), 'ord_1'] = 'Expert'
         x.loc[x['month'] == 10, 'month'] = 12
         x.loc[x['month'] == 7, 'month'] = 9
         x.loc[x['month'] == 6, 'month'] = 12
@@ -87,7 +86,7 @@ class Encoder(BaseEstimator, TransformerMixin):
 
         na_value = self.get_na_value(x)
 
-        for feature in ['nom_8', 'ord_3']:
+        for feature in ['nom_8', 'ord_3', 'ord_2', 'nom_1', 'nom_2']:
             enc = x[x['target'] > -1].groupby(feature)['target'].mean()
             x[feature + '_1'] = 0
             x.loc[x[feature].isin(list(enc[enc > na_value].index)), feature + '_1'] = 1
@@ -95,16 +94,6 @@ class Encoder(BaseEstimator, TransformerMixin):
             x.loc[x[feature].isna(), feature + '_1'] = 0
 
         _x = x.copy()
-
-        if self.correct_features['ord_4']:
-            _x = self.correct_ord_4(_x)
-        if self.correct_features['ord_5']:
-            _x = self.correct_ord_5(_x)
-        if self.correct_features['day']:
-            _x = self.correct_day(_x)
-        if self.correct_features['nom_7']:
-            _x = self.correct_nom_7(_x)
-
         features = self.get_features(_x.columns)
 
         _x = self.target_encoding(_x, self.nominal_features, na_value=na_value)
@@ -113,25 +102,24 @@ class Encoder(BaseEstimator, TransformerMixin):
                             if f in self.ordinal_features and f not in self.cardinal_features]
         _x = self.encode_ordinal(_x, ordinal_features, na_value)
 
-        for feature in self.filters:
-            if len(self.filters[feature]) == 3:
-                _x = self.filter_feature(_x, feature, self.filters[feature][2])
+        for feature in ['nom_6']:
+            filter_ = self.filters[feature][0]
+            _x = self.filter_feature(_x, feature, na_count=filter_, value=np.nan)
 
-        for feature in self.cardinal_features:
-            if feature in self.filters:
-                if self.filters[feature][0] is not None:
-                    _x = self.binning(_x, [feature],
-                                      eps=self.filters[feature][0],
-                                      precision=self.filters[feature][1])
+        for feature in ['nom_9']:
+            eps = self.filters[feature][0]
+            prec = self.filters[feature][1]
+            filter_1 = self.filters[feature][2]
+            filter_2 = self.filters[feature][3]
+            _x = self.filter_feature(_x, feature, na_count=filter_1, value='-2')
+            _x = self.filter_cv(_x, 'nom_9', std_max=filter_2, value='-2')
+            _x = self.binning(_x, [feature], eps=eps, precision=prec)
 
-            if 'n_groups' in self.cardinal_encoding[feature]:
-                cv = self.cardinal_encoding[feature]['cv']
-                n_groups = self.cardinal_encoding[feature]['n_groups']
-
-                _x = self.target_encoding_cv(_x, [feature], cv, na_value=na_value)
-
-                if n_groups > 0:
-                    _x = self.group_features(_x, [feature], n_groups=n_groups)
+        for feature in ['nom_6']:
+            cv = self.cardinal_encoding[feature]['cv']
+            n_groups = self.cardinal_encoding[feature]['n_groups']
+            _x = self.target_encoding_cv(_x, [feature], cv, na_value=na_value)
+            _x = self.group_features(_x, [feature], n_groups=n_groups)
 
         for feature in features:
             if feature == 'month':
@@ -194,73 +182,9 @@ class Encoder(BaseEstimator, TransformerMixin):
 
         return _train_x, _train_y, _test_x, _test_id
 
-    def augment_train(self, x):
-        features = self.get_features(x.columns)
-
-        train, test = utils.split_data(x)
-        fair_count = self.get_fair_na_count(len(train))
-
-        if self.verbose:
-            n_obs = (train[features].isna().sum() - fair_count).abs().sum()
-            logger.info(f'conflicts before: {n_obs}')
-
-        for feature in features:
-            na_count = train[feature].isna().sum()
-
-            index = random.sample(
-                list(train[train[feature].isna()].index),
-                int(np.abs(na_count - fair_count)))
-
-            if na_count > fair_count:
-                train = train.drop(index).reset_index(drop=True)
-            elif na_count < fair_count:
-                train = train.append(train.iloc[index]).reset_index(drop=True)
-
-        if self.verbose:
-            na_counts = train[features].isna().sum()
-            n_obs = (na_counts - fair_count).abs().sum()
-            logger.info(f'conflicts after: {n_obs}')
-
-        x = pd.concat([train, test])
-
-        return x
-
     @staticmethod
     def get_na_value(x):
         return x[x['target'] > -1]['target'].mean()
-
-    @staticmethod
-    def get_fair_na_count(n_obs):
-        return 0.03 * n_obs
-
-    @staticmethod
-    def correct_day(x):
-        x.loc[(x['month'] == 2) & (x['day'] == 2), 'day'] = 6
-        x.loc[(x['month'] == 4) & (x['day'] == 6), 'day'] = 7
-        x.loc[(x['month'] == 5) & (x['day'] == 7), 'day'] = 1
-        x.loc[(x['month'] == 10) & (x['day'] == 2), 'day'] = 1
-        x.loc[(x['month'] == 10) & (x['day'] == 6), 'day'] = 1
-        x.loc[(x['month'] == 10) & (x['day'] == 7), 'day'] = 1
-        return x
-
-    @staticmethod
-    def correct_ord_4(x):
-        x.loc[x['ord_4'] == 'J', 'ord_4'] = 'K'
-        x.loc[x['ord_4'] == 'L', 'ord_4'] = 'M'
-        x.loc[x['ord_4'] == 'S', 'ord_4'] = 'R'
-        return x
-
-    @staticmethod
-    def correct_ord_5(x):
-        x.loc[x['ord_5'] == 'Z', 'ord_5'] = 'Y'
-        x.loc[x['ord_5'] == 'K', 'ord_5'] = 'L'
-        x.loc[x['ord_5'] == 'E', 'ord_5'] = 'D'
-        return x
-
-    @staticmethod
-    def correct_nom_7(x):
-        x.loc[x['nom_7'] == 'b39008216', 'nom_7'] = '230229e51'
-        return x
 
     @staticmethod
     def get_features(features):
@@ -272,7 +196,7 @@ class Encoder(BaseEstimator, TransformerMixin):
         train = x[x['target'] > -1].reset_index(drop=True)
 
         for feature in features:
-            if feature in ['ord_4', 'ord_5']:
+            if feature in ['ord_4', 'ord_5', 'ord_1']:
                 x.loc[x[feature].isna(), feature] = -1
                 train.loc[train[feature].isna(), feature] = -1
 
@@ -291,7 +215,7 @@ class Encoder(BaseEstimator, TransformerMixin):
                 model = sm.OLS(y, X).fit()
                 encoding['mean'] = model.predict(sm.add_constant(encoding['x']))
                 encoding.loc[encoding.index == -1, 'mean'] = na_value
-            elif feature in ['ord_0', 'ord_1']:
+            elif feature in ['ord_0']:
                 encoding = train.groupby(feature)['target'].agg(['mean', 'count'])
 
                 y = encoding['mean']
@@ -318,7 +242,7 @@ class Encoder(BaseEstimator, TransformerMixin):
         mask = x['target'] > -1
 
         for feature in features:
-            target_mean = x[mask].groupby(feature)['target'].mean()
+            target_mean = x[mask & (x[feature] != '-2')].groupby(feature)['target'].mean()
 
             if eps is not None:
                 target_mean = ((target_mean / eps).round() * eps).round(precision)
@@ -382,60 +306,81 @@ class Encoder(BaseEstimator, TransformerMixin):
 
         return x
 
+    def filter_cv(self, x, feature, std_max=1, value=np.nan, alpha=None):
+        train = x.loc[x['target'] > -1, :]
+
+        for i in range(3):
+            cv = StratifiedKFold(n_splits=2, shuffle=True, random_state=2020 * i)
+            for fold, (train_index, valid_index) in enumerate(
+                    cv.split(train[feature], train['target'])):
+                enc_1 = train.iloc[train_index].groupby(feature)['target'].agg(['mean', 'count'])
+                enc_1.rename(columns={
+                    'mean': 'mean_' + str(2*i+1),
+                    'count': 'count_' + str(str(2*i+1))
+                }, inplace=True)
+
+                enc_2 = train.iloc[valid_index].groupby(feature)['target'].agg(['mean', 'count'])
+                enc_2.rename(columns={
+                    'mean': 'mean_' + str(2*i+2),
+                    'count': 'count_' + str(2*i+2)
+                }, inplace=True)
+
+                if i == 0:
+                    enc = enc_1.merge(enc_2, how='outer', left_index=True, right_index=True)
+                else:
+                    enc = enc.merge(enc_1, how='outer', left_index=True, right_index=True)
+                    enc = enc.merge(enc_2, how='outer', left_index=True, right_index=True)
+                break
+
+        enc['std'] = enc[['mean_' + str(1 + i) for i in range(6)]].std(axis=1)
+        enc['count'] = enc['count_1'].fillna(0) + enc['count_2'].fillna(0)
+
+        if alpha is None:
+#            mask = x[feature].isin(enc.loc[enc['std'] > std_max].index)
+            index = enc.loc[enc['std'] > std_max].index
+        else:
+            enc.loc[enc['std'] == 0, 'std'] = 1
+            enc.sort_values(by='std', ascending=False, inplace=True)
+            enc['cum_count'] = enc['count'].cumsum()
+            index = enc[enc['cum_count'] < alpha * len(train)].index
+
+        logger.info(f'{feature}: {x[feature].isin(index).sum()} filtered')
+        mask = x[feature].isin(index)
+        x.loc[mask, feature] = value
+
+        return x
+
+
     @staticmethod
     def group_features(x, features, n_groups):
-        levels = [i/n_groups for i in range(n_groups + 1)]
-
         for feature in features:
             mask = x[feature] >= 0
 
             x.loc[mask, feature] = \
                 pd.qcut(x.loc[mask, feature], n_groups, labels=False, duplicates='drop')
 
-#            bins = x.loc[mask, feature].quantile(levels).drop_duplicates().values.tolist()
-
-#            if bins[0] > 0:
-#                bins = [0] + bins
-
-#            if bins[-1] < 1:
-#                bins += [1]
-#            x.loc[mask, feature] = pd.cut(x.loc[mask, feature], bins, labels=False, duplicates='drop')
-
-#            for i in range(len(bins) - 1):
-#                x.loc[mask & (x[feature] >= bins[i]) & (x[feature] < bins[i + 1]), feature] = i + 1
-
-#            x.loc[mask, feature] = pd.cut(x.loc[mask, feature], bins, labels=False, duplicates='drop')
-
         return x
 
-    def filter_feature(self, x, feature, na_count=0):
-        mask = x['target'] > -1
+    def filter_feature(self, x, feature, na_count=0, alpha=None, value=np.nan):
+        if len(x) > 600000:
+            mask = x['target'] > -1
+            stat = x[mask].groupby(feature)['target'].agg(['count', 'mean'])
+        else:
+            stat = x.groupby(feature)['target'].agg(['count', 'mean'])
 
-        stat = x[mask].groupby(feature)['target'].agg(['count', 'mean'])
+        if alpha is None:
+            index = stat[stat['count'] < na_count].index
+#            na_filter = list(stat[stat['count'] < na_count].index)
+        else:
+            stat.sort_values(by='count', ascending=True, inplace=True)
+            stat['cum_count'] = stat['count'].cumsum()
+            index = stat[stat['cum_count'] < alpha * len(x)].index
+#            index = stat[stat['count'] < stat['count'].quantile(alpha)].index
+#            na_filter = list()
 
-        na_filter = list(stat[stat['count'] < na_count].index)
-        mask_na = x[feature].isin(na_filter)
-        x.loc[mask_na, feature] = np.nan
-
-#        filtered = list(stat[stat['mean'] < filter_[2]].index)
-#        mask_low = x[feature].isin(filtered)
-
-#        filtered = list(stat[stat['mean'] > filter_[3]].index)
-#        mask_high = x[feature].isin(filtered)
-
-#        if x[feature].dtype == 'object':
-#            x.loc[mask_na, feature] = 'nan'
-#            x.loc[~mask_na & mask_low, feature] = 'low'
-#            x.loc[~mask_na & mask_high, feature] = 'high'
-#        else:
-#            x.loc[mask_na, feature] = -1
-#            x.loc[~mask_na & mask_low, feature] = -2
-#            x.loc[~mask_na & mask_high, feature] = -3
-
-        if self.verbose:
-            logger.info(f'{feature}: {mask_na.sum()} na')
-#                f'{(~mask_na & mask_low).sum()} low, '
-#                f'{(~mask_na & mask_high).sum()} high')
+        logger.info(f'{feature}: {x[feature].isin(index).sum()} filtered')
+        mask = x[feature].isin(index)
+        x.loc[mask, feature] = value
 
         return x
 
@@ -451,10 +396,14 @@ class BayesSearch(BaseEstimator, TransformerMixin):
             ordinal_features = ['ord_0', 'ord_1', 'ord_4', 'ord_5',
                                 'bin_0', 'bin_1', 'bin_2', 'bin_4',
                                 'nom_0', 'nom_3', 'nom_4',
-                                'nom_8_1', 'ord_3_1']
+                                'nom_8_1', 'ord_3_1', 'ord_2_1',
+                                'nom_1_1', 'nom_2_1']
 
             filters = {
-                'nom_9': [0.0000001, 7, 29]
+                'nom_5': [0.02, 0.35],
+                'nom_7': [0.02, 0.35],
+                'nom_8': [0.02, 0.35],
+                'nom_9': [0.0000001, 7, 15, 0.08],
             }
 
             cardinal_encoding = dict()
@@ -464,13 +413,6 @@ class BayesSearch(BaseEstimator, TransformerMixin):
             cardinal_encoding['nom_6']['n_groups'] = 3
             cardinal_encoding['nom_9'] = dict()
 
-            correct_features = {
-                'ord_4': False,
-                'ord_5': False,
-                'day': False,
-                'nom_7': False
-            }
-
             encoder = Encoder(
                 ordinal_features=ordinal_features,
                 cardinal_encoding=cardinal_encoding,
@@ -478,7 +420,6 @@ class BayesSearch(BaseEstimator, TransformerMixin):
                 handle_missing=True,
                 log_alpha=0,
                 one_hot_encoding=True,
-                correct_features=correct_features,
                 verbose=self.verbose)
 
             estimator = LogisticRegression(
@@ -487,6 +428,7 @@ class BayesSearch(BaseEstimator, TransformerMixin):
                 class_weight={0: 1, 1: 1.42},
                 solver='liblinear',
                 max_iter=2020,
+                tol=1e-9,
                 fit_intercept=True,
                 penalty='l2',
                 verbose=0)
