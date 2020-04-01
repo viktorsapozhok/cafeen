@@ -1,59 +1,31 @@
 import logging
 
-import lightgbm as lgb
 import numpy as np
 import pandas as pd
 from scipy import sparse
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
-from sklearn.model_selection import KFold, StratifiedKFold
-from sklearn.linear_model import LogisticRegression, RidgeClassifier
-from sklearn.naive_bayes import CategoricalNB, BernoulliNB
-from sklearn.preprocessing import StandardScaler, OrdinalEncoder, MinMaxScaler, OneHotEncoder
+from sklearn.model_selection import StratifiedKFold
+from sklearn.preprocessing import OneHotEncoder
 
-from cafeen import config, steps, utils
+from . import config, steps, utils
 
 logger = logging.getLogger('cafeen')
 
 
-def submit_1(**kwargs):
-    nrows = kwargs.get('nrows', None)
-    verbose = kwargs.get('verbose', False)
+def validate(n_valid_rows=0):
+    scores = []
 
-    ordinal_features = ['ord_0', 'ord_1', 'ord_4', 'ord_5',
-                        'bin_0', 'bin_1', 'bin_2', 'bin_4',
-                        'nom_0', 'nom_3', 'nom_4',
-                        'nom_8_1', 'ord_3_1', 'ord_2_1',
-                        'nom_1_1', 'nom_2_1']
+    for seed in [0, 1, 2, 2020]:
+        scores += [predict(n_valid_rows=n_valid_rows, seed=seed)]
 
-    cardinal_encoding = dict()
-    cardinal_encoding['nom_6'] = dict()
-    cardinal_encoding['nom_6']['cv'] = StratifiedKFold(n_splits=3, shuffle=True, random_state=2020)
-    cardinal_encoding['nom_6']['n_groups'] = 3
-    cardinal_encoding['nom_9'] = dict()
+    logger.debug(f'score: {np.mean(scores):.6f}')
 
-#    for s in [95, 98, 102, 105]:
-#        scores = []
-#    for seed in [0, 1, 2, 2020]:
-    df, valid_y = utils.read_data(
-        nrows=nrows,
-        valid_rows=kwargs.get('valid_rows', 0),
-        seed=2020)
 
-    filters = {
-        'nom_6': [90],
-        'nom_9': [0.0000001, 7, 52, 0.1],
-    }
+def predict(n_valid_rows=0, seed=2020):
+    df, valid_y = utils.read_data(n_valid_rows=n_valid_rows, seed=seed)
 
-    encoder = steps.Encoder(
-        ordinal_features=ordinal_features,
-        cardinal_encoding=cardinal_encoding,
-        filters=filters,
-        handle_missing=True,
-        log_alpha=0,
-        one_hot_encoding=True,
-        verbose=verbose)
-
-    train_x, train_y, test_x, test_id = encoder.fit_transform(df)
+    train_x, train_y, test_x, test_id = encode(df)
 
     estimator = LogisticRegression(
         random_state=2020,
@@ -63,7 +35,7 @@ def submit_1(**kwargs):
         max_iter=2020,
         fit_intercept=True,
         penalty='l2',
-        verbose=1 * verbose)
+        verbose=0)
 
     if valid_y is None:
         submitter = steps.Submitter(estimator, config.path_to_data)
@@ -73,93 +45,101 @@ def submit_1(**kwargs):
     if isinstance(train_y, pd.Series):
         train_y = train_y.values
 
-    y_pred = submitter.fit(train_x, train_y).predict_proba(test_x, test_id=test_id)
+    y_pred = submitter.fit(train_x, train_y).predict_proba(
+        test_x, test_id=test_id)
 
     if valid_y is not None:
         _valid_y = valid_y.merge(y_pred[['id', 'target']], how='left', on='id')
-        score = roc_auc_score(_valid_y['y_true'].values, _valid_y['target'].values)
+        score = roc_auc_score(
+            _valid_y['y_true'].values,
+            _valid_y['target'].values)
         logger.info(f'score: {score:.6f}')
-#                scores += [score]
-#        logger.debug(f'score: {np.mean(scores):.6f}')
-#        logger.info('')
-#        except KeyboardInterrupt:
-#            logger.info('')
-#            continue
-
-
-def submit_4(**kwargs):
-    logger.info('reading train')
-    train = pd.read_csv(config.path_to_train, nrows=kwargs.get('nrows', None))
-    train = train.drop(columns=['bin_3'])
-
-    bs = steps.BayesSearch(
-        n_trials=kwargs.get('trials'),
-        n_folds=kwargs.get('folds'),
-        verbose=kwargs.get('verbose'))
-
-    bs.fit(train)
-
-
-def _submit(train, test, valid_y=None, **kwargs):
-#    estimator = steps.OneColClassifier(
-#        estimator=lgb.LGBMClassifier(
-#            objective='binary',
-#            metric='auc',
-#            is_unbalance=True,
-#            boost_from_average=False,
-#            n_estimators=kwargs.get('n_estimators', 100),
-#            learning_rate=kwargs.get('eta', 0.1),
-#            num_leaves=57,
-#            min_child_samples=35,
-#            colsample_bytree=0.3,
-#            reg_alpha=0.8,
-#            reg_lambda=1),
-#        n_splits=1)
-
-#    estimator = LogisticRegression(solver='liblinear', C=0.095, verbose=1)
-
-    features = utils.get_features(train.columns)
-
-#    estimator.fit(train[features], train['target'])
-#    y_pred = estimator.predict_proba(test[features + ['id']])
-
-    estimator = LogisticRegression(
-        random_state=2020,
-        C=0.1,
-        class_weight='balanced',
-        solver='liblinear',
-        max_iter=2020,
-        fit_intercept=True,
-        penalty='l2',
-        verbose=1)
-
-#    estimator = LogisticRegression(
-#        random_state=1,
-#        solver='lbfgs',
-#        max_iter=2020,
-#        fit_intercept=True,
-#        penalty='none',
-#        verbose=1)
-
-#    estimator = CategoricalNB(alpha=0)
-#    estimator = BernoulliNB(alpha=1)
-
-    clf = steps.Classifier(estimator)
-#    clf.cross_val(train[features].values, train['target'].values, n_splits=6, corr=False)
-#    submitter = steps.Submitter(clf)
-
-    if valid_y is None:
-        submitter = steps.Submitter(clf, config.path_to_data)
     else:
-        submitter = steps.Submitter(clf)
+        score = 0
 
-    y_pred = submitter.fit(
-        train[features], train['target']).predict_proba(test)
+    return score
 
-    if valid_y is not None:
-#        valid_y = valid_y.merge(y_pred[['id', 'mean']], how='left', on='id')
-        valid_y = valid_y.merge(y_pred[['id', 'target']], how='left', on='id')
-        score = roc_auc_score(valid_y['y_true'].values, valid_y['target'].values)
-        logger.info('')
-        logger.debug(f'score: {score}')
-        logger.info('')
+
+def encode(df):
+    df = df.drop(columns=['bin_3'])
+
+    df.loc[df['day'] == 5, 'day'] = 3
+    df.loc[df['day'] == 6, 'day'] = 2
+    df.loc[df['day'] == 7, 'day'] = 1
+    df.loc[df['nom_1'] == 'Square', 'nom_1'] = 'Triangle'
+    df.loc[df['nom_4'] == 'Oboe', 'nom_4'] = 'Theremin'
+    df.loc[df['ord_0'].isna(), 'ord_0'] = 2
+    df.loc[df['month'] == 10, 'month'] = 12
+    df.loc[df['month'] == 7, 'month'] = 9
+    df.loc[df['month'] == 6, 'month'] = 12
+    df.loc[df['month'].isna(), 'month'] = 8
+
+    df['ord_1'] = df['ord_1'].map({
+        'Novice': 1,
+        'Contributor': 2,
+        'Expert': 3,
+        'Master': 4,
+        'Grandmaster': 5
+    })
+
+    na_value = df[df['target'] > -1]['target'].mean()
+
+    extra_features = ['nom_8', 'ord_3', 'ord_2', 'nom_1', 'nom_2']
+    linear_features = ['ord_0', 'ord_1', 'ord_4', 'ord_5']
+    cardinal_features = ['nom_6', 'nom_9']
+    ohe_features = [
+        'nom_1', 'nom_2', 'nom_5',
+        'nom_6', 'nom_7', 'nom_8', 'nom_9',
+        'ord_2', 'ord_3', 'day', 'month']
+
+    for feature in extra_features:
+        feature_ = feature + '_'
+        df[feature_] = 0
+
+        enc = df[df['target'] > -1].groupby(feature)['target'].mean()
+
+        df.loc[df[feature].isin(enc[enc > na_value].index), feature_] = 1
+        df.loc[df[feature].isin(enc[enc < na_value].index), feature_] = -1
+        df.loc[df[feature].isna(), feature_] = 0
+
+    feature_params = {
+        'ord_0': {'alpha': 0},
+        'ord_1': {'alpha': 0},
+        'ord_4': {'alpha': 0.2},
+        'ord_5': {'alpha': 0.1},
+        'nom_6': {
+            'count_min': 90,
+            'cv': StratifiedKFold(n_splits=3, shuffle=True, random_state=2020),
+            'n_groups': 3
+        },
+        'nom_9': {
+            'count_min': 52,
+            'std_max': 0.1,
+            'eps': (0.0000001, 7)
+        }
+    }
+
+    encoder = steps.Encoder(
+        linear_features=linear_features,
+        cardinal_features=cardinal_features,
+        feature_params=feature_params,
+        na_value=na_value)
+
+    df = encoder.fit_transform(df)
+
+    train, test = utils.split_data(df)
+
+    train_y = train['target']
+    test_id = test['id']
+
+    ordinal_features = [f for f in encoder.features if f not in ohe_features]
+
+    encoder = OneHotEncoder(sparse=True)
+    encoder.fit(df[ohe_features])
+
+    train_x = encoder.transform(train[ohe_features])
+    train_x = sparse.hstack((train_x, train[ordinal_features].values)).tocsr()
+    test_x = encoder.transform(test[ohe_features])
+    test_x = sparse.hstack((test_x, test[ordinal_features].values)).tocsr()
+
+    return train_x, train_y, test_x, test_id

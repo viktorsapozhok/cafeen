@@ -1,278 +1,115 @@
 from datetime import datetime
-import gc
-import logging
 from os import path
-import random
+from typing import Any, Dict, List
 import warnings
 
-warnings.simplefilter(action='ignore', category=FutureWarning)
-
-import eli5
-from eli5.sklearn import PermutationImportance
 import numpy as np
-import optuna
 import pandas as pd
-from scipy import sparse
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.model_selection import StratifiedKFold
 import statsmodels.api as sm
-from sklearn.base import (
-    BaseEstimator,
-    ClassifierMixin,
-    TransformerMixin
-)
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import roc_auc_score
-from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-from cafeen import utils, config
+from . import utils
 
-optuna.logging.set_verbosity(optuna.logging.ERROR)
-logger = logging.getLogger('cafeen')
+warnings.simplefilter(action='ignore', category=FutureWarning)
 
 
 class Encoder(BaseEstimator, TransformerMixin):
     def __init__(
             self,
-            ordinal_features=None,
-            cardinal_encoding=None,
-            filters=None,
-            handle_missing=True,
-            log_alpha=0.1,
-            one_hot_encoding=True,
-            verbose=True
-    ):
-        self.cardinal_encoding = cardinal_encoding
-        self.handle_missing = handle_missing
-        self.filters = filters
-        self.log_alpha = log_alpha
-        self.one_hot_encoding = one_hot_encoding
-        self.verbose = verbose
+            linear_features: List[str],
+            cardinal_features: List[str],
+            feature_params: Dict[str, Dict[str, Any]],
+            na_value: float
+    ) -> None:
+        self.linear_features = linear_features
+        self.cardinal_features = cardinal_features
+        self.params = feature_params
+        self.na_value = na_value
 
-        if ordinal_features is None:
-            self.ordinal_features = []
-        else:
-            self.ordinal_features = ordinal_features
-
+        self.features = None
         self.nominal_features = None
-        self.cardinal_features = None
 
     def fit(self, x, y=None):
-        features = self.get_features(x.columns)
+        self.features = self.get_features(x)
 
-        self.cardinal_features = list(self.cardinal_encoding.keys())
-        self.nominal_features = [f for f in features
-                                 if f not in self.cardinal_features + self.ordinal_features]
+        self.nominal_features = [
+            feature for feature in self.features
+            if feature not in self.linear_features + self.cardinal_features
+        ]
 
         return self
 
     def transform(self, x):
-#        x['nans'] = x.isnull().sum(axis=1)
-        x.loc[x['day'] == 5, 'day'] = 3
-        x.loc[x['day'] == 6, 'day'] = 2
-        x.loc[x['day'] == 7, 'day'] = 1
-        x.loc[x['nom_1'] == 'Square', 'nom_1'] = 'Triangle'
-        x.loc[x['nom_4'] == 'Oboe', 'nom_4'] = 'Theremin'
-        x.loc[x['ord_0'].isna(), 'ord_0'] = 2
-#        x.loc[x['ord_1'].isna(), 'ord_1'] = 'Expert'
-        x.loc[x['month'] == 10, 'month'] = 12
-        x.loc[x['month'] == 7, 'month'] = 9
-        x.loc[x['month'] == 6, 'month'] = 12
-        x.loc[x['month'].isna(), 'month'] = 8
+        x = self.target_encoding(x, self.nominal_features)
 
-        x['ord_1'] = x['ord_1'].map({
-            'Novice': 1, 'Contributor': 2, 'Expert': 3, 'Master': 4, 'Grandmaster': 5})
-#        x['ord_2'] = x['ord_2'].map({
-#            'Freezing': 1, 'Cold': 2, 'Warm': 3, 'Hot': 4, 'Boiling Hot': 5, 'Lava Hot': 6})
+        for feature in self.linear_features:
+            x = self.linear_encoding(
+                x, feature, alpha=self.params[feature]['alpha'])
 
-        na_value = self.get_na_value(x)
+        for feature in self.cardinal_features:
+            if 'count_min' in self.params[feature].keys():
+                count_min = self.params[feature]['count_min']
+                x = self.count_filter(x, feature, count_min=count_min)
 
-        for feature in ['nom_8', 'ord_3', 'ord_2', 'nom_1', 'nom_2']:
-            enc = x[x['target'] > -1].groupby(feature)['target'].mean()
-            x[feature + '_1'] = 0
-            x.loc[x[feature].isin(list(enc[enc > na_value].index)), feature + '_1'] = 1
-            x.loc[x[feature].isin(list(enc[enc < na_value].index)), feature + '_1'] = -1
-            x.loc[x[feature].isna(), feature + '_1'] = 0
+            if 'cv' in self.params[feature].keys():
+                cv = self.params[feature]['cv']
+                x = self.target_encoding_cv(x, feature, cv=cv)
 
-        _x = x.copy()
-        features = self.get_features(_x.columns)
+            if 'n_groups' in self.params[feature].keys():
+                n_groups = self.params[feature]['n_groups']
+                x = self.group_feature(x, feature, n_groups=n_groups)
 
-        _x = self.target_encoding(_x, self.nominal_features, na_value=na_value)
+            if 'std_max' in self.params[feature].keys():
+                std_max = self.params['nom_9']['std_max']
+                x = self.std_filter(x, feature, std_max=std_max)
 
-        ordinal_features = [f for f in features
-                            if f in self.ordinal_features and f not in self.cardinal_features]
-        _x = self.encode_ordinal(_x, ordinal_features, na_value)
+            if 'eps' in self.params[feature].keys():
+                eps =self.params['nom_9']['eps']
+                x = self.binning(x, feature, eps=eps)
 
-        for feature in ['nom_6']:
-            filter_ = self.filters[feature][0]
-            _x = self.filter_feature(_x, feature, na_count=filter_, value=np.nan)
+        for feature in self.features:
+            x.loc[x[feature].isna(), feature] = -1
 
-        for feature in ['nom_9']:
-            eps = self.filters[feature][0]
-            prec = self.filters[feature][1]
-            filter_1 = self.filters[feature][2]
-            filter_2 = self.filters[feature][3]
-            _x = self.filter_feature(_x, feature, na_count=filter_1, value='-2')
-            _x = self.filter_cv(_x, 'nom_9', std_max=filter_2, value='-2')
-            _x = self.binning(_x, [feature], eps=eps, precision=prec)
-
-        for feature in ['nom_6']:
-            cv = self.cardinal_encoding[feature]['cv']
-            n_groups = self.cardinal_encoding[feature]['n_groups']
-            _x = self.target_encoding_cv(_x, [feature], cv, na_value=na_value)
-            _x = self.group_features(_x, [feature], n_groups=n_groups)
-
-        for feature in features:
-            if feature == 'month':
-                continue
-
-            if self.handle_missing:
-                if (feature not in self.ordinal_features) and (feature in x.columns):
-                    _x.loc[x[feature].isna(), feature] = -1
-            _x.loc[_x[feature].isna(), feature] = -1
-
-            if feature in self.ordinal_features:
-                if self.log_alpha > 0:
-                    _x[feature] = np.log(self.log_alpha + _x[feature])
-
-        if self.verbose:
-            logger.info(f'na_value: {na_value:.5f}')
-            logger.info('')
-
-            for feature in features:
-                try:
-                    logger.info(
-                        f'{feature}: {_x[feature].min():.4f} - {_x[feature].max():.4f}')
-                except (TypeError, ValueError):
-                    continue
-
-        if self.verbose:
-            logger.info('')
-            logger.info('amount of unique values')
-            for feature in features:
-                logger.info(f'{feature}: {_x[feature].nunique()}')
-
-        assert _x[features].isnull().sum().sum() == 0
-
-        _train, _test = utils.split_data(_x)
-
-        _train_y = _train['target']
-        _train_x = _train[features]
-        _test_x = _test[features]
-        _test_id = _test['id']
-
-        if self.one_hot_encoding:
-            ohe_features = [f for f in features if f not in self.ordinal_features]
-            ordinal_features = [f for f in features if f not in ohe_features]
-
-            encoder = OneHotEncoder(sparse=True)
-#            encoder = OneHotEncoder(sparse=True, drop='first')
-            encoder.fit(_x[ohe_features])
-            del _x
-            gc.collect()
-
-            _train_x = encoder.transform(_train[ohe_features])
-            _train_x = sparse.hstack((_train_x, _train[ordinal_features].values)).tocsr()
-            _test_x = encoder.transform(_test[ohe_features])
-            _test_x = sparse.hstack((_test_x, _test[ordinal_features].values)).tocsr()
-
-        if self.verbose:
-            logger.info('')
-            logger.info(f'train: {_train_x.shape}, test: {_test_x.shape}')
-            logger.info('')
-
-        return _train_x, _train_y, _test_x, _test_id
+        return x
 
     @staticmethod
-    def get_na_value(x):
-        return x[x['target'] > -1]['target'].mean()
+    def get_features(x):
+        return [c for c in x.columns if c not in ['id', 'target']]
 
-    @staticmethod
-    def get_features(features):
-        return [feature for feature in features
-                if feature not in ['id', 'target']]
+    def linear_encoding(self, x, feature, alpha):
+        train = x[x['target'] > -1].reset_index(drop=True)
 
-    @staticmethod
-    def encode_ordinal(x, features, na_value):
+        train.loc[train[feature].isna(), feature] = -1
+
+        encoding = train.groupby(feature)['target'].agg(['mean', 'count'])
+        encoding['x'] = range(len(encoding))
+
+        min_count = encoding['count'].quantile(alpha)
+        mask = (encoding.index != -1) & (encoding['count'] >= min_count)
+
+        y = encoding.loc[mask, 'mean']
+        X = sm.add_constant(encoding.loc[mask, 'x'])
+
+        model = sm.OLS(y, X).fit()
+
+        encoding['mean'] = model.predict(sm.add_constant(encoding['x']))
+        encoding.loc[encoding.index == -1, 'mean'] = self.na_value
+
+        return self.encode_feature(x, feature, encoding['mean'])
+
+    def target_encoding(self, x, features):
         train = x[x['target'] > -1].reset_index(drop=True)
 
         for feature in features:
-            if feature in ['ord_4', 'ord_5', 'ord_1']:
-                x.loc[x[feature].isna(), feature] = -1
-                train.loc[train[feature].isna(), feature] = -1
-
-                encoding = train.groupby(feature)['target'].agg(['mean', 'count'])
-                encoding['x'] = range(len(encoding))
-
-                q = 0
-                if feature == 'ord_4':
-                    q = 0.2
-                if feature == 'ord_5':
-                    q = 0.1
-
-                mask = (encoding.index != -1) & (encoding['count'] >= encoding['count'].quantile(q))
-                y = encoding.loc[mask, 'mean']
-                X = sm.add_constant(encoding.loc[mask, 'x'])
-                model = sm.OLS(y, X).fit()
-                encoding['mean'] = model.predict(sm.add_constant(encoding['x']))
-                encoding.loc[encoding.index == -1, 'mean'] = na_value
-            elif feature in ['ord_0']:
-                encoding = train.groupby(feature)['target'].agg(['mean', 'count'])
-
-                y = encoding['mean']
-                X = sm.add_constant(list(range(len(encoding))))
-                model = sm.OLS(y, X).fit()
-                encoding['mean'] = model.predict(X)
-            else:
-                x.loc[x[feature].isna(), feature] = -1
-                train.loc[train[feature].isna(), feature] = -1
-                encoding = train.groupby(feature)['target'].agg(['mean', 'count'])
-                encoding.loc[encoding.index == -1, 'mean'] = na_value
-
-            encoding['mean'] = \
-                (encoding['mean'] - encoding['mean'].min()) / \
-                (encoding['mean'].max() - encoding['mean'].min())
-            x[feature] = x[feature].map(encoding['mean'].to_dict())
-            x[feature] = (x[feature] - x[feature].mean()) / x[feature].std()
-#            x[feature] = (x[feature] - x[feature].min()) / (x[feature].max() - x[feature].min())
+            train.loc[train[feature].isna(), feature] = -1
+            encoding = train.groupby(feature)['target'].mean()
+            encoding.loc[encoding.index == -1] = self.na_value
+            x = self.encode_feature(x, feature, encoding)
 
         return x
 
-    @staticmethod
-    def binning(x, features, eps=None, precision=None):
-        mask = x['target'] > -1
-
-        for feature in features:
-            target_mean = x[mask & (x[feature] != '-2')].groupby(feature)['target'].mean()
-
-            if eps is not None:
-                target_mean = ((target_mean / eps).round() * eps).round(precision)
-
-            x[feature] = x[feature].map(target_mean.to_dict())
-
-        return x
-
-    def target_encoding(self, x, features, na_value=None, x_ref=None):
-        mask = x['target'] > -1
-
-        for feature in features:
-            x.loc[x[feature].isna(), feature] = '-1'
-            target_mean = x[mask].groupby(feature)['target'].mean()
-
-            if na_value is not None:
-                target_mean['-1'] = na_value
-
-            x[feature] = x[feature].map(target_mean.to_dict())
-
-            if x_ref is not None:
-                mean_ref = x_ref[mask].groupby(feature)['target'].agg(['count', 'mean'])
-                mean_ref['count'] /= mean_ref['count'].max()
-                mean_ref.loc[mean_ref['count'] <= self.filters[feature][0], 'mean'] = -1
-                feature_ref = x_ref[feature].map(mean_ref['mean'].to_dict())
-                x.loc[feature_ref >= 0, feature] = feature_ref[feature_ref >= 0]
-
-        return x
-
-    def target_encoding_cv(self, x, features, cv, na_value=None):
+    def target_encoding_cv(self, x, feature, cv):
         train, test = utils.split_data(x)
         del x
 
@@ -280,605 +117,109 @@ class Encoder(BaseEstimator, TransformerMixin):
         encoded = pd.DataFrame()
 
         for fold, (train_index, valid_index) in enumerate(
-                cv.split(train[features], train['target'])):
-            if self.verbose:
-                logger.info(f'target encoding on fold {fold + 1}')
+                cv.split(train[feature], train['target'])):
+            encoder = TargetEncoder(na_value=self.na_value)
 
-            encoder = TargetEncoder(na_value=na_value)
-
-            encoder.fit(train.iloc[train_index][features],
+            encoder.fit(train.iloc[train_index][[feature]],
                         train.iloc[train_index]['target'])
 
             encoded = encoded.append(
-                encoder.transform(train.iloc[valid_index][features]),
+                encoder.transform(train.iloc[valid_index][[feature]]),
                 ignore_index=False)
 
-        encoder = TargetEncoder(na_value=na_value)
-        encoder.fit(train[features], train['target'])
+        encoder = TargetEncoder(na_value=self.na_value)
+        encoder.fit(train[[feature]], train['target'])
 
         _test = test.copy()
-        _test[features] = encoder.transform(test[features].copy())
+        _test[feature] = encoder.transform(test[[feature]].copy())
 
         _train = train.copy()
-        _train[features] = encoded.groupby(level=0).mean()
+        _train[feature] = encoded.groupby(level=0).mean()
 
         x = pd.concat([_train[test.columns], _test])
-
         return x
-
-    def filter_cv(self, x, feature, std_max=1, value=np.nan, alpha=None):
-        train = x.loc[x['target'] > -1, :]
-
-        for i in range(3):
-            cv = StratifiedKFold(n_splits=2, shuffle=True, random_state=2020 * i)
-            for fold, (train_index, valid_index) in enumerate(
-                    cv.split(train[feature], train['target'])):
-                enc_1 = train.iloc[train_index].groupby(feature)['target'].agg(['mean', 'count'])
-                enc_1.rename(columns={
-                    'mean': 'mean_' + str(2*i+1),
-                    'count': 'count_' + str(str(2*i+1))
-                }, inplace=True)
-
-                enc_2 = train.iloc[valid_index].groupby(feature)['target'].agg(['mean', 'count'])
-                enc_2.rename(columns={
-                    'mean': 'mean_' + str(2*i+2),
-                    'count': 'count_' + str(2*i+2)
-                }, inplace=True)
-
-                if i == 0:
-                    enc = enc_1.merge(enc_2, how='outer', left_index=True, right_index=True)
-                else:
-                    enc = enc.merge(enc_1, how='outer', left_index=True, right_index=True)
-                    enc = enc.merge(enc_2, how='outer', left_index=True, right_index=True)
-                break
-
-        enc['std'] = enc[['mean_' + str(1 + i) for i in range(6)]].std(axis=1)
-        enc['count'] = enc['count_1'].fillna(0) + enc['count_2'].fillna(0)
-
-        if alpha is None:
-#            mask = x[feature].isin(enc.loc[enc['std'] > std_max].index)
-            index = enc.loc[enc['std'] > std_max].index
-        else:
-            enc.loc[enc['std'] == 0, 'std'] = 1
-            enc.sort_values(by='std', ascending=False, inplace=True)
-            enc['cum_count'] = enc['count'].cumsum()
-            index = enc[enc['cum_count'] < alpha * len(train)].index
-
-        logger.info(f'{feature}: {x[feature].isin(index).sum()} filtered')
-        mask = x[feature].isin(index)
-        x.loc[mask, feature] = value
-
-        return x
-
 
     @staticmethod
-    def group_features(x, features, n_groups):
-        for feature in features:
-            mask = x[feature] >= 0
+    def group_feature(x, feature, n_groups):
+        mask = x[feature] >= 0
 
-            x.loc[mask, feature] = \
-                pd.qcut(x.loc[mask, feature], n_groups, labels=False, duplicates='drop')
+        x.loc[mask, feature] = pd.qcut(
+            x.loc[mask, feature], n_groups, labels=False, duplicates='drop')
 
         return x
 
-    def filter_feature(self, x, feature, na_count=0, alpha=None, value=np.nan):
+    @staticmethod
+    def count_filter(x, feature, count_min=0):
         if len(x) > 600000:
             mask = x['target'] > -1
-            stat = x[mask].groupby(feature)['target'].agg(['count', 'mean'])
+            counts = x[mask].groupby(feature).size()
         else:
-            stat = x.groupby(feature)['target'].agg(['count', 'mean'])
+            counts = x.groupby(feature).size()
 
-        if alpha is None:
-            index = stat[stat['count'] < na_count].index
-#            na_filter = list(stat[stat['count'] < na_count].index)
-        else:
-            stat.sort_values(by='count', ascending=True, inplace=True)
-            stat['cum_count'] = stat['count'].cumsum()
-            index = stat[stat['cum_count'] < alpha * len(x)].index
-#            index = stat[stat['count'] < stat['count'].quantile(alpha)].index
-#            na_filter = list()
-
-        logger.info(f'{feature}: {x[feature].isin(index).sum()} filtered')
-        mask = x[feature].isin(index)
-        x.loc[mask, feature] = value
+        index = counts[counts < count_min].index
+        x.loc[x[feature].isin(index), feature] = np.nan
 
         return x
 
-
-class BayesSearch(BaseEstimator, TransformerMixin):
-    def __init__(self, n_trials=10, n_folds=3, verbose=True):
-        self.n_trials = n_trials
-        self.n_folds = n_folds
-        self.verbose = verbose
-
-    def fit(self, x, y=None):
-        def _evaluate(trial):
-            ordinal_features = ['ord_0', 'ord_1', 'ord_4', 'ord_5',
-                                'bin_0', 'bin_1', 'bin_2', 'bin_4',
-                                'nom_0', 'nom_3', 'nom_4',
-                                'nom_8_1', 'ord_3_1', 'ord_2_1',
-                                'nom_1_1', 'nom_2_1']
-
-            filters = {
-                'nom_5': [0.02, 0.35],
-                'nom_7': [0.02, 0.35],
-                'nom_8': [0.02, 0.35],
-                'nom_9': [0.0000001, 7, 15, 0.08],
-            }
-
-            cardinal_encoding = dict()
-            cardinal_encoding['nom_6'] = dict()
-            cardinal_encoding['nom_6']['cv'] = \
-                StratifiedKFold(n_splits=3, shuffle=True, random_state=2020)
-            cardinal_encoding['nom_6']['n_groups'] = 3
-            cardinal_encoding['nom_9'] = dict()
-
-            encoder = Encoder(
-                ordinal_features=ordinal_features,
-                cardinal_encoding=cardinal_encoding,
-                filters=filters,
-                handle_missing=True,
-                log_alpha=0,
-                one_hot_encoding=True,
-                verbose=self.verbose)
-
-            estimator = LogisticRegression(
-                random_state=2020,
-                C=0.049,
-                class_weight={0: 1, 1: 1.42},
-                solver='liblinear',
-                max_iter=2020,
-                tol=1e-9,
-                fit_intercept=True,
-                penalty='l2',
-                verbose=0)
-
-            scores = []
-
-            for fold in range(self.n_folds):
-                if self.verbose:
-                    logger.info('')
-                    logger.debug(f'fold {fold} started')
-                    logger.info('')
-
-                train, valid, _, _ = train_test_split(
-                    x, x['target'],
-                    test_size=0.5,
-                    shuffle=True,
-                    random_state=fold,
-                    stratify=x['target'])
-
-                _valid = valid.copy()
-                _valid['target'] = -1
-                train = train.append(_valid).reset_index(drop=True)
-                del _valid
-
-                _train_x, _train_y, _test_x, _test_id = encoder.fit_transform(train)
-
-                predicted = pd.DataFrame()
-                predicted['id'] = _test_id.values
-                predicted['y_pred'] = estimator.fit(_train_x, _train_y).predict_proba(_test_x)[:, 1]
-                del _train_x, _test_x, _train_y, _test_id
-
-                _valid = valid.merge(predicted, how='left', on='id')
-                score = -roc_auc_score(_valid['target'].values, _valid['y_pred'].values)
-                scores += [score]
-                del _valid, predicted
-                gc.collect()
-
-                if self.verbose:
-                    logger.debug(f'score: {score:.5f}')
-
-            logger.info('')
-            logger.debug(f"scores: {', '.join([str(np.round(score, 5)) for score in scores])}, avg: {np.mean(scores):.6f}")
-
-            self._print_trial(trial, np.mean(scores))
-
-            return np.mean(scores)
-
-        def _pack_best_trial(trial):
-            pass
-
-        study = optuna.create_study()
-        study.optimize(_evaluate, n_trials=self.n_trials)
-        _pack_best_trial(study.best_trial)
-
-        return self
-
-    def transform(self, x, y=None):
-        return x
-
-    def _print_trial(self, trial, score):
-        info = f'trial {trial.number:2.0f}: '
-        info += self._params2str(trial.params)
-        info += f'score: {score:6.5f}'
-
-        is_best = False
-
-        if trial.number > 0:
-            info += f', best: {min(score, trial.study.best_value):6.5f}'
-
-            if score < trial.study.best_value:
-                is_best = True
-        elif trial.number < 0:
-            if score < trial.study_best_value:
-                is_best = True
-
-        logger.info('')
-
-        if is_best:
-            logger.debug(info)
-        else:
-            logger.info(info)
-
-        logger.info('')
-
     @staticmethod
-    def _create_trial(estimator, number, best_value):
-        trial = optuna.trial.FixedTrial(estimator.get_params())
-        setattr(trial, 'number', number)
-        setattr(trial, 'study_best_value', best_value)
-        return trial
+    def std_filter(x, feature, std_max=1, n_folds=3):
+        train = x.loc[x['target'] > -1, :]
 
-    @staticmethod
-    def _params2str(params):
-        info = ''
-        for key in params:
-            if params[key] is None:
-                info += f'{key}: None, '
-            else:
-                if isinstance(params[key], int):
-                    info += f'{key}: {params[key]:.0f}, '
-                elif isinstance(params[key], str):
-                    info += f'{key}: {params[key]}, '
-                elif isinstance(params[key], bool):
-                    info += f'{key}: {str(params[key])}, '
-                else:
-                    info += f'{key}: {params[key]:.3f}, '
-        return info
-
-    @staticmethod
-    def _get_params(params):
-        _params = dict(params)
-        return _params
-
-
-class NaiveBayes(BaseEstimator, ClassifierMixin):
-    def __init__(self, na_value=-1, correct_features=None):
-        self.na_value = na_value
-
-        if correct_features is None:
-            self.correct_features = []
-        else:
-            self.correct_features = correct_features
-
-        self.class_count_ = np.zeros(2)
-        self.class_prior_ = np.zeros(2)
-        self.posterior_ = dict()
-
-    def fit(self, x, y=None):
-        self.class_count_[0] = (y == 0).sum()
-        self.class_count_[1] = (y == 1).sum()
-        self.class_prior_ = self.class_count_ / np.sum(self.class_count_)
-
-        for fid, feature in enumerate(x.columns):
-            counts_0 = x[y == 0].groupby(feature).size()
-            counts_1 = x[y == 1].groupby(feature).size()
-
-            for category, category_count in counts_0.iteritems():
-                if category == self.na_value:
-                    self.posterior_[fid, category, 0] = self.na_prob()
-                else:
-                    self.posterior_[fid, category, 0] = category_count / self.class_count_[0]
-
-            for category, category_count in counts_1.iteritems():
-                if category == self.na_value:
-                    self.posterior_[fid, category, 1] = self.na_prob()
-                else:
-                    self.posterior_[fid, category, 1] = category_count / self.class_count_[1]
-
-        if 'ord_3' in self.correct_features:
-            fid = x.columns.get_loc('ord_3')
-            counts = x.groupby('ord_3').size()
-
-            for class_ in range(2):
-                self.posterior_[fid, 'g', class_] = self.mid_prob(
-                    counts['g'], counts['f'], counts['h'], self.posterior_[fid, 'f', class_], self.posterior_[fid, 'h', class_])
-                self.posterior_[fid, 'j', class_] = self.mid_prob(
-                    counts['j'], counts['i'], counts['k'], self.posterior_[fid, 'i', class_], self.posterior_[fid, 'k', class_])
-
-        if 'ord_4' in self.correct_features:
-            fid = x.columns.get_loc('ord_4')
-            counts = x.groupby('ord_4').size()
-
-            for class_ in range(2):
-                self.posterior_[fid, 'G', class_] = self.mid_prob(
-                    counts['G'], counts['F'], counts['H'], self.posterior_[fid, 'F', class_], self.posterior_[fid, 'H', class_])
-                self.posterior_[fid, 'J', class_] = self.mid_prob(
-                    counts['J'], counts['I'], counts['K'], self.posterior_[fid, 'I', class_], self.posterior_[fid, 'K', class_])
-                self.posterior_[fid, 'L', class_] = self.mid_prob(
-                    counts['L'], counts['K'], counts['M'], self.posterior_[fid, 'K', class_], self.posterior_[fid, 'M', class_])
-                self.posterior_[fid, 'S', class_] = self.mid_prob(
-                    counts['S'], counts['R'], counts['T'], self.posterior_[fid, 'R', class_], self.posterior_[fid, 'T', class_])
-
-        if 'month' in self.correct_features:
-            fid = x.columns.get_loc('month')
-            counts = x.groupby('month').size()
-
-            for class_ in range(2):
-                self.posterior_[fid, 10, class_] = self.mid_prob(
-                    counts[10], counts[9], counts[11], self.posterior_[fid, 9, class_], self.posterior_[fid, 11, class_])
-
-        if 'ord_0' in self.correct_features:
-            fid = x.columns.get_loc('ord_0')
-            counts = x.groupby('ord_0').size()
-
-            for class_ in range(2):
-                self.posterior_[fid, 2, class_] = self.mid_prob(
-                    counts[2], counts[1], counts[3], self.posterior_[fid, 1, class_], self.posterior_[fid, 3, class_])
-
-        return self
-
-    def predict_proba(self, x):
-        y = np.zeros((len(x), 2))
-
-        for i, features in enumerate(x.values):
-            for k in range(2):
-                p = 1
-
-                for j, val in enumerate(features):
-                    try:
-                        p *= self.posterior_[j, val, k]
-                    except KeyError:
-                        p *= self.posterior_[j, self.na_value, k]
-
-                y[i, k] = self.class_prior_[k] * p
-
-            y_sum = y[i, 0] + y[i, 1]
-            y[i, 0] /= y_sum
-            y[i, 1] /= y_sum
-
-        return y
-
-    @staticmethod
-    def na_prob():
-        return 0.03
-
-    @staticmethod
-    def mid_prob(p_mid, p_1, p_2, p_1_y, p_2_y):
-        return 0.5 * p_mid * ((p_1_y / p_1) + (p_2_y / p_2))
-
-
-class OneColClassifier(BaseEstimator):
-    def __init__(self, estimator, n_splits=1):
-        self.estimators = [estimator] * n_splits
-        self.n_splits = n_splits
-
-    def fit(self, x, y=None, early_stopping_rounds=100, verbose=20):
-        x, y = self.union_features(x, y)
-
-        if self.n_splits > 1:
-            score = 0
-            cv = KFold(n_splits=self.n_splits, shuffle=True, random_state=2020)
-
-            for fold, (train_index, valid_index) in enumerate(cv.split(x, y)):
-                train_x, train_y = x[train_index], y[train_index]
-                valid_x, valid_y = x[valid_index], y[valid_index]
-
-                logger.info('')
-                logger.debug(f'started training on fold {fold}')
-                logger.info('')
-
-                self.estimators[fold].fit(
-                    train_x,
-                    train_y,
-                    eval_set=[(valid_x, valid_y)],
-                    eval_metric='auc',
-                    early_stopping_rounds=early_stopping_rounds,
-                    categorical_feature=[0],
-                    verbose=verbose)
-
-                score += self.estimators[fold].best_score_['valid_0']['auc']
-
-                logger.info('')
-                logger.debug(f'score: {score / self.n_splits:.4f}')
-                logger.info('')
-        else:
-            self.estimators[0].fit(
-                x, y,
-                categorical_feature=['feature'],
-                feature_name=['feature', 'value'],
-                verbose=verbose)
-
-        return self
-
-    def predict_proba(self, x, valid):
-        features = list(x.columns)
-        x, _ = self.union_features(x, index=x['id'], return_df=True)
-
-        predicted = np.zeros(len(x))
-
-        for estimator in self.estimators:
-            p = estimator.predict_proba(x[['feature', 'value']])
-            predicted += p[:, 1] / self.n_splits
-
-        y_pred = self.decompose(x, predicted)
-
-        train = valid.merge(y_pred, how='left', on='id')
-
-        _estimator = LogisticRegression(
-            random_state=2020,
-            solver='lbfgs',
-            max_iter=2020,
-            fit_intercept=True,
-            penalty='none',
-            verbose=1)
-
-        y_pred['y_pred'] = _estimator.fit(
-            train[['mean', 'percentile_10', 'percentile_90']], train['y_true']).predict_proba(
-            train[['mean', 'percentile_10', 'percentile_90']])[:, 1]
-
-        return y_pred
-
-    @staticmethod
-    def roc_auc_score(y_true, y_score):
-        return 'roc_auc', -roc_auc_score(y_true, y_score), False
-
-    @staticmethod
-    def union_features(x, y=None, index=None, return_df=False):
-        x_new = pd.DataFrame()
-
-        for i, col in enumerate(x.columns):
-            _x = pd.DataFrame()
-
-            if index is not None:
-                _x['id'] = x['id']
-
-            _x['value'] = x[col]
-
-            if y is not None:
-                _x['target'] = y
-
-            _x['feature'] = i
-            x_new = x_new.append(_x)
-
-        x_new['feature'] = x_new['feature'].astype('int')
-
-        if return_df:
-            x = x_new[['id', 'feature', 'value']]
-        else:
-            x = x_new[['feature', 'value']].values
-
-        if y is not None:
-            if return_df:
-                y = x_new['target']
-            else:
-                y = x_new['target'].values
-
-        return x, y
-
-    def decompose(self, x, predicted):
-        x['target'] = predicted
-        y_pred = x.groupby('id')['target'].agg(['mean', self.percentile(10), self.percentile(90)])
-        return y_pred.reset_index(level='id')
-
-    @staticmethod
-    def percentile(n):
-        def percentile_(x):
-            return np.percentile(x, n)
-        percentile_.__name__ = 'percentile_%s' % n
-        return percentile_
-
-
-class LgbClassifier(BaseEstimator):
-    def __init__(self, estimator, n_splits):
-        self.estimators = [estimator] * n_splits
-        self.n_splits = n_splits
-
-    def fit(self, x, y=None,
-            categorical_feature='auto',
-            feature_name='auto',
-            early_stopping_rounds=100,
-            verbose=200):
-        score = 0
-
-        if self.n_splits > 1:
+        for i in range(n_folds):
             cv = StratifiedKFold(
-                n_splits=self.n_splits,
-                shuffle=True,
-                random_state=2020)
+                n_splits=2, shuffle=True, random_state=2020 * i)
 
-            for fold, (train_index, valid_index) in enumerate(cv.split(x, y)):
-                train_x, train_y = x[train_index], y[train_index]
-                valid_x, valid_y = x[valid_index], y[valid_index]
+            for fold, (train_index, valid_index) in enumerate(
+                    cv.split(train[feature], train['target'])):
+                enc_1 = train.iloc[
+                    train_index].groupby(feature)['target'].mean()
+                enc_1 = enc_1.rename('mean_' + str(2 * i + 1))
 
-                logger.info('')
-                logger.debug(f'started training on fold {fold}')
-                logger.info('')
+                enc_2 = train.iloc[
+                    valid_index].groupby(feature)['target'].mean()
+                enc_2 = enc_2.rename('mean_' + str(2 * i + 2))
 
-                self.estimators[fold].fit(
-                    train_x,
-                    train_y,
-                    categorical_feature=categorical_feature,
-                    feature_name=feature_name,
-                    eval_set=[(valid_x, valid_y)],
-                    eval_metric='auc',
-                    early_stopping_rounds=early_stopping_rounds,
-                    verbose=verbose)
+                if i == 0:
+                    enc = enc_1.to_frame().merge(
+                        enc_2.to_frame(),
+                        how='outer', left_index=True, right_index=True)
+                else:
+                    enc = enc.merge(
+                        enc_1.to_frame(),
+                        how='outer', left_index=True, right_index=True)
+                    enc = enc.merge(
+                        enc_2.to_frame(),
+                        how='outer', left_index=True, right_index=True)
+                break
 
-                score += self.estimators[fold].best_score_['valid_0']['auc']
+        columns = ['mean_' + str(1 + i) for i in range(n_folds)]
+        enc['std'] = enc[columns].std(axis=1)
 
-            logger.info('')
-            logger.debug(f'score: {score / self.n_splits:.4f}')
-            logger.info('')
-        else:
-            self.estimators[0].fit(
-                x, y,
-                categorical_feature=categorical_feature,
-                feature_name=feature_name,
-                verbose=verbose)
+        index = enc.loc[enc['std'] > std_max].index
+        x.loc[x[feature].isin(index), feature] = np.nan
 
-        return self
-
-    def predict_proba(self, x):
-        predicted = np.zeros(x.shape[0])
-
-        for estimator in self.estimators:
-            p = estimator.predict_proba(x)
-            predicted += p[:, 1] / self.n_splits
-
-        return predicted
+        return x
 
     @staticmethod
-    def roc_auc_score(y_true, y_score):
-        return 'roc_auc', -roc_auc_score(y_true, y_score), False
+    def binning(x, feature, eps=(0.001, 3)):
+        mask = x['target'] > -1
 
+        encoding = x[mask].groupby(feature)['target'].mean()
 
-class Classifier(BaseEstimator):
-    def __init__(self, estimator):
-        self._estimator = estimator
+        if eps is not None:
+            encoding = ((encoding / eps[0]).round() * eps[0]).round(eps[1])
 
-    def fit(self, x, y=None, **fit_params):
-        self._estimator.fit(x, y, **fit_params)
-        return self
+        x[feature] = x[feature].map(encoding.to_dict())
+        return x
 
-    def cross_val(self, x, y, n_splits, corr=False):
-        scores = []
-
-        if n_splits > 1:
-            cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=2020)
-
-            for fold, (train_index, valid_index) in enumerate(cv.split(x, y)):
-                train_x, train_y = x[train_index], y[train_index]
-                valid_x, valid_y = x[valid_index], y[valid_index]
-
-                if corr:
-                    corr_index = np.all(valid_x <= np.max(train_x, axis=0), axis=1)
-                    valid_x = valid_x[corr_index]
-                    valid_y = valid_y[corr_index]
-
-                logger.info('')
-                logger.debug(f'started training on fold {fold}')
-                logger.info('')
-
-                estimator = self._estimator
-                estimator.fit(train_x, train_y)
-
-                y_pred = estimator.predict_proba(valid_x)
-                score = roc_auc_score(valid_y, y_pred[:, 1])
-                scores += [score]
-
-                logger.info(f'score: {score:.4f}')
-        else:
-            y_pred = self._estimator.fit(x, y).predict_proba(x)
-            scores += [roc_auc_score(y, y_pred[:, 1])]
-
-        logger.info('')
-        logger.debug(f'score: {np.mean(scores):.5f}')
-        logger.info('')
-
-    def predict_proba(self, x):
-        return self._estimator.predict_proba(x)
+    @staticmethod
+    def encode_feature(x, feature, encoding):
+        x.loc[x[feature].isna(), feature] = -1
+        encoding = (encoding - encoding.min()) / \
+                   (encoding.max() - encoding.min())
+        x[feature] = x[feature].map(encoding.to_dict())
+        x[feature] = (x[feature] - x[feature].mean()) / x[feature].std()
+        return x
 
 
 class Submitter(BaseEstimator):
@@ -909,125 +250,34 @@ class Submitter(BaseEstimator):
         return self.results
 
 
-class FeatureSelector(BaseEstimator, TransformerMixin):
-    def __init__(self, estimator, threshold=0.0002):
-        self.estimator = estimator
-        self.threshold = threshold
-        self.features = None
-
-    def get_features(self):
-        return self.features
-
-    def fit(self, x, y=None):
-        train_x, test_x, train_y, test_y = \
-            train_test_split(x, y, shuffle=True, train_size=0.7)
-
-        self.estimator.fit(train_x, train_y)
-
-        perm_estimator = PermutationImportance(
-            estimator=self.estimator,
-#            scoring=make_scorer(roc_auc_score, needs_proba=True),
-            n_iter=5).fit(test_x, test_y)
-
-        # calculate feature weights and return it as DataFrame
-        expl = eli5.format_as_dataframe(
-            eli5.explain_weights(
-                perm_estimator,
-                top=None,
-                feature_names=x.columns.to_list()))
-
-        # select features with weights above the threshold
-        selected = self.select_features(expl)
-        self.features = selected['feature'].to_list()
-
-        return self
-
-    def transform(self, x, y=None):
-        return x[self.features]
-
-    def select_features(self, expl, verbose=True):
-        expl = expl.sort_values(by='weight', ascending=False)
-
-        if verbose:
-            logger.info('')
-
-            for row in expl.itertuples():
-                msg = f'{row.weight:7.4f} +- {2*row.std:5.3f} {row.feature}'
-
-                if row.weight >= self.threshold:
-                    logger.debug(msg)
-                else:
-                    logger.info(msg)
-
-            logger.info('')
-
-        mask = expl['weight'] >= self.threshold
-
-        return expl.loc[mask, ['feature', 'weight', 'std']]
-
-
 class TargetEncoder(BaseEstimator, TransformerMixin):
     def __init__(self, na_value=None):
         self.na_value = na_value
-        self.target_mean = {}
+        self.encoding = dict()
 
     def fit(self, x, y=None):
-        features = list(x.columns)
         _x = x.copy()
         _x['target'] = y
+
         mask = _x['target'] > -1
 
-        for feature in features:
+        for feature in x.columns:
             _x.loc[_x[feature].isna(), feature] = '-1'
-            target_mean = _x[mask].groupby(feature)['target'].mean()
+            encoding = _x[mask].groupby(feature)['target'].mean()
 
             if self.na_value is not None:
-                target_mean['-1'] = self.na_value
+                encoding['-1'] = self.na_value
 
-            self.target_mean[feature] = target_mean
+            self.encoding[feature] = encoding
 
         return self
 
     def transform(self, x):
-        for feature in list(x.columns):
+        for feature in x.columns:
             x.loc[x[feature].isna(), feature] = '-1'
-
             values = x[feature].unique()
-            encoded_values = list(self.target_mean[feature].index)
-            unknown_values = [val for val in values if val not in encoded_values]
-            x.loc[x[feature].isin(unknown_values), feature] = '-1'
-
-            x[feature] = x[feature].map(self.target_mean[feature].to_dict())
+            encoded = self.encoding[feature].index
+            unknown = [v for v in values if v not in encoded]
+            x.loc[x[feature].isin(unknown), feature] = '-1'
+            x[feature] = x[feature].map(self.encoding[feature].to_dict())
         return x
-
-
-class LogReg(BaseEstimator):
-    def __init__(self, estimator, n_splits):
-        self.estimators = [estimator] * n_splits
-        self.n_splits = n_splits
-
-    def fit(self, x, y=None):
-        if self.n_splits > 1:
-            cv = StratifiedKFold(
-                n_splits=self.n_splits,
-                shuffle=True,
-                random_state=2020)
-
-            for fold, (train_index, _) in enumerate(cv.split(x, y)):
-                train_x, train_y = x[train_index], y[train_index]
-
-                logger.debug(f'training on fold {fold}')
-                self.estimators[fold].fit(train_x, train_y)
-        else:
-            self.estimators[0].fit(x, y)
-
-        return self
-
-    def predict_proba(self, x):
-        predicted = np.zeros(x.shape[0])
-
-        for estimator in self.estimators:
-            p = estimator.predict_proba(x)
-            predicted += p[:, 1] / self.n_splits
-
-        return predicted

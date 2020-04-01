@@ -1,15 +1,28 @@
-import fire
+import click
 
 from . import config, clients
 
 
-def submit(sid, **kwargs):
-    getattr(clients, 'submit_' + str(sid))(**kwargs)
+@click.group()
+def cafeen():
+    """Categorical Feature Encoding Challenge"""
+
+    pass
 
 
-def main():
+@cafeen.command()
+def submit():
+    clients.predict(n_valid_rows=0)
+
+
+@cafeen.command()
+@click.option('--rows', default=0, type=int,
+              help='Number of rows in validation set')
+def validate(rows):
     config.setup_logger()
 
-    fire.Fire({
-        'submit': submit
-    })
+    clients.validate(n_valid_rows=rows)
+
+
+if __name__ == '__main__':
+    cafeen()
