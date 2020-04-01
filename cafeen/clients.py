@@ -63,17 +63,6 @@ def predict(n_valid_rows=0, seed=2020):
 def encode(df):
     df = df.drop(columns=['bin_3'])
 
-    df.loc[df['day'] == 5, 'day'] = 3
-    df.loc[df['day'] == 6, 'day'] = 2
-    df.loc[df['day'] == 7, 'day'] = 1
-    df.loc[df['nom_1'] == 'Square', 'nom_1'] = 'Triangle'
-    df.loc[df['nom_4'] == 'Oboe', 'nom_4'] = 'Theremin'
-    df.loc[df['ord_0'].isna(), 'ord_0'] = 2
-    df.loc[df['month'] == 10, 'month'] = 12
-    df.loc[df['month'] == 7, 'month'] = 9
-    df.loc[df['month'] == 6, 'month'] = 12
-    df.loc[df['month'].isna(), 'month'] = 8
-
     df['ord_1'] = df['ord_1'].map({
         'Novice': 1,
         'Contributor': 2,
@@ -82,25 +71,8 @@ def encode(df):
         'Grandmaster': 5
     })
 
-    na_value = df[df['target'] > -1]['target'].mean()
-
-    extra_features = ['nom_8', 'ord_3', 'ord_2', 'nom_1', 'nom_2']
     linear_features = ['ord_0', 'ord_1', 'ord_4', 'ord_5']
     cardinal_features = ['nom_6', 'nom_9']
-    ohe_features = [
-        'nom_1', 'nom_2', 'nom_5',
-        'nom_6', 'nom_7', 'nom_8', 'nom_9',
-        'ord_2', 'ord_3', 'day', 'month']
-
-    for feature in extra_features:
-        feature_ = feature + '_'
-        df[feature_] = 0
-
-        enc = df[df['target'] > -1].groupby(feature)['target'].mean()
-
-        df.loc[df[feature].isin(enc[enc > na_value].index), feature_] = 1
-        df.loc[df[feature].isin(enc[enc < na_value].index), feature_] = -1
-        df.loc[df[feature].isna(), feature_] = 0
 
     feature_params = {
         'ord_0': {'alpha': 0},
@@ -113,11 +85,13 @@ def encode(df):
             'n_groups': 3
         },
         'nom_9': {
-            'count_min': 52,
+            'count_min': 60,
             'std_max': 0.1,
             'eps': (0.0000001, 7)
         }
     }
+
+    na_value = df[df['target'] > -1]['target'].mean()
 
     encoder = steps.Encoder(
         linear_features=linear_features,
@@ -132,6 +106,7 @@ def encode(df):
     train_y = train['target']
     test_id = test['id']
 
+    ohe_features = [f for f in encoder.features if f not in linear_features]
     ordinal_features = [f for f in encoder.features if f not in ohe_features]
 
     encoder = OneHotEncoder(sparse=True)

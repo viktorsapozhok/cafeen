@@ -73,10 +73,6 @@ class Encoder(BaseEstimator, TransformerMixin):
 
         return x
 
-    @staticmethod
-    def get_features(x):
-        return [c for c in x.columns if c not in ['id', 'target']]
-
     def linear_encoding(self, x, feature, alpha):
         train = x[x['target'] > -1].reset_index(drop=True)
 
@@ -220,6 +216,10 @@ class Encoder(BaseEstimator, TransformerMixin):
         x[feature] = x[feature].map(encoding.to_dict())
         x[feature] = (x[feature] - x[feature].mean()) / x[feature].std()
         return x
+
+    @staticmethod
+    def get_features(x):
+        return [c for c in x.columns if c not in ['id', 'target']]
 
 
 class Submitter(BaseEstimator):
