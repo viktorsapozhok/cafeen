@@ -42,6 +42,8 @@ CV: 0.78130, private score: 0.78527
 After hyperparameters optimization, I found the following configuration yields a highest CV score.
 
 ```python
+    from sklearn.linear_model import LogisticRegression
+
     estimator = LogisticRegression(
         C=0.049,
         class_weight={0: 1, 1: 1.42},
@@ -75,6 +77,7 @@ grouped in three groups with `qcut`.
 
 ```python
     import pandas as pd
+
     x['nom_6'] = pd.qcut(x['nom_6'], 3, labels=False, duplicates='drop')
 ```
 
