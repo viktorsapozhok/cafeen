@@ -90,6 +90,12 @@ and combined together categories which have equal target average.
 
 CV: 0.78691, private score: 0.78797
 
+#### Missing values
+
+For one-hot encoded features (all features except `ord_0`, `ord_1`, `ord_4`, `ord_5`), 
+I replaced missing values with `-1`. For ordinal encoded features, I replaced it with 
+the target probability, `0.18721`.  
+
 ### Results
 
 That's it, though I haven't chosen the best submission for final score and the official
