@@ -30,14 +30,14 @@ different `random_seed` and calculated CV score as a mean score over 4 iteration
  
 ### Score improvements
 
-##### Baseline
+#### Baseline
 
-As a baseline model I used logistic regression with default parameters and `liblinear` solver. 
+As a baseline model, I used logistic regression with default parameters and `liblinear` solver. 
 All features in dataset are one-hot encoded.
 
 CV: 0.78130, private score: 0.78527
 
-##### Tuning hyperparameters
+#### Tuning hyperparameters
 
 After hyperparameters optimization, I found the following configuration yields a highest CV score.
 
@@ -52,22 +52,22 @@ After hyperparameters optimization, I found the following configuration yields a
 
 CV: 0.78519, private score: 0.78704
 
-##### Drop bin_3
+#### Drop bin_3
 
 I dropped `bin_3` feature, as it seems to be not really important, and keeping
 it in the dataset doesn't improve the score.
 
 CV: 0.78520, private score: 0.78704
 
-##### Ordinal encoding
+#### Ordinal encoding
 
 I used ordinal encoding for `ord_0`, `ord_1`, `ord_4`, `ord_5`, approximating 
-target average with a linear function. For `ord_4` and `ord_5` before applying
-linear regression, I removed outliers, categories with small amount of observations.
+target average with a linear function. For `ord_4` and `ord_5` I removed outliers, 
+categories with small amount of observations, before applying the linear regression. 
 
 CV: 0.78582, private score: 0.78727
 
-##### Grouping
+#### Grouping
 
 For `nom_6` feature I removed all categories which have less than 90 observations (replaced it with `nan`).
 Then using target_encoding with cross-validation, converted it to numeric and
@@ -80,7 +80,7 @@ grouped in three groups with `qcut`.
 
 CV: 0.78691, private score: 0.78796
 
-##### Filtering
+#### Filtering
 
 For `nom_9` feature I removed all categories which have less than 60 observations (replaced it with `nan`)
 and combined together categories which have equal target average. 
@@ -94,4 +94,3 @@ results are a bit worse.
 
 Private score 0.78795 (110 place)
 Public score 0.78669 (22 place)
-
