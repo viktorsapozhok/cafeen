@@ -14,12 +14,12 @@ def setup_logger():
     logger = logging.getLogger('cafeen')
 
     stream_formatter = ColoredFormatter(
-        '%(log_color)s%(asctime)s | %(message)s',
+        '%(log_color)s%(message)s',
         datefmt='%Y-%m-%d %H:%M:%S',
         reset=True,
         log_colors={
             'DEBUG': 'green',
-            'INFO': 'white',
+            'INFO': 'black',
             'WARNING': 'yellow',
             'ERROR': 'red',
             'CRITICAL': 'red'

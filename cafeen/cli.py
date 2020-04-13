@@ -1,27 +1,24 @@
 import click
 
-from . import config, clients
+from . import config, steps
 
 
 @click.group()
 def cafeen():
-    """Categorical Feature Encoding Challenge"""
+    """Categorical Feature Encoding Challenge II"""
 
     pass
 
 
 @cafeen.command()
 def submit():
-    clients.predict(n_valid_rows=0)
+    pass
 
 
 @cafeen.command()
-@click.option('--rows', default=0, type=int,
-              help='Number of rows in validation set')
-def validate(rows):
+def validate():
     config.setup_logger()
-
-    clients.validate(n_valid_rows=rows)
+    steps.cross_val()
 
 
 if __name__ == '__main__':
