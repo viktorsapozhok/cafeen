@@ -29,15 +29,34 @@ nominal_features = [
 
 
 def cross_val():
+    """Cross-validation.
+
+    Randomly split train dataset (600000 rows) into 2 sets
+    contained 300000 rows each. One set is used for training, and
+    another one for validation.
+
+    Repeat operation 4 times using different random seeds.
+    """
+
     for seed in [0, 1, 2, 3]:
-        train_x, test_x, train_y, test_y, test_id = \
-            make_data(config.path_to_train, seed=seed, drop_features=['bin_3'])
+        train_x, test_x, train_y, test_y, test_id = make_data(
+            path_to_train=config.path_to_train,
+            seed=seed,
+            drop_features=['bin_3'])
 
         score = train_predict(train_x, train_y, test_x, test_y=test_y)
         logger.info(f'score: {score:.6f}')
 
 
 def train_predict(train_x, train_y, test_x, test_y=None):
+    """Train estimator and make a prediction.
+
+    It applies various encodings to categorical features and
+    trains the logistic regression over encoded dataset.
+
+    Returns ROC AUC computed on validation set.
+    """
+
     is_val = test_y is not None
     train_x, test_x = encode(train_x, train_y, test_x, is_val=is_val)
 
@@ -58,6 +77,14 @@ def train_predict(train_x, train_y, test_x, test_y=None):
 
 
 def encode(train_x, train_y, test_x, is_val=False):
+    """Implements encoding of categorical features.
+
+    Target encoding with cross-validation for ``nom_6``.
+    Target encoding for ``nom_9``.
+    Ordinal encoding for ``ord_0``, ``ord_1``, ``ord_4``, ``ord_5``.
+    One-hor encoding for ``nominal_features``.
+    """
+
     test_y = pd.Series(data=[np.nan] * len(test_x), index=test_x.index)
     fill_value = train_y.mean()
 
@@ -159,10 +186,9 @@ def ord_1_to_ordinal(x):
     """
 
     df = x.copy()
-    df['ord_1'] = x['ord_1'].map({
-        'Novice': 1,
-        'Contributor': 2,
-        'Expert': 3,
-        'Master': 4,
-        'Grandmaster': 5})
+    df['ord_1'] = x['ord_1'].map({'Novice': 1,
+                                  'Contributor': 2,
+                                  'Expert': 3,
+                                  'Master': 4,
+                                  'Grandmaster': 5})
     return df

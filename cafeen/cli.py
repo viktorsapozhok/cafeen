@@ -12,11 +12,17 @@ def cafeen():
 
 @cafeen.command()
 def submit():
+    """Make a submission.
+    """
+
     pass
 
 
 @cafeen.command()
 def validate():
+    """Cross-validation.
+    """
+
     config.setup_logger()
     steps.cross_val()
 

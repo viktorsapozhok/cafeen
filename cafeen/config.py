@@ -5,9 +5,9 @@ from colorlog import ColoredFormatter
 
 root_dir = path.join(path.abspath(path.dirname(__file__)), '..')
 
-path_to_train = path.join(root_dir, 'data', 'train.csv')
-path_to_test = path.join(root_dir, 'data', 'test.csv')
 path_to_data = path.join(root_dir, 'data')
+path_to_train = path.join(path_to_data, 'train.csv')
+path_to_test = path.join(path_to_data, 'test.csv')
 
 
 def setup_logger():
