@@ -23,7 +23,7 @@ for seed in [0, 1, 2, 3]:
  
 ### Encoding pipeline
 
-The full encoding pipeline [can be seen here](/cafeen/steps.py). 
+The full encoding pipeline [can be seen here](/cafeen/steps.py).  
 
 ### Score improvements
 
