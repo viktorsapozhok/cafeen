@@ -206,6 +206,38 @@ class TargetEncoder(BaseEncoder):
 
 
 class TargetEncoderCV(TransformerMixin, BaseEstimator):
+    """K-Fold target encoding.
+
+    Divide train dataset in K folds and replace the categories
+    presented in M-th fold with mean target of data from
+    all others except M-th fold. Encode test dataset using mean
+    target calculated on train set.
+
+    Args:
+        cv:
+            Determines the cross-validation splitting strategy.
+        columns:
+            List of column names to encode.
+        fill_value:
+            Value to use to fill the missing values.
+        min_count:
+            Use positive value to replace with NaN all the categories
+            with amount of observations less than ``min_count``.
+        n_groups:
+            Number of groups to combine encoded categories into.
+            Grouping is not applied if this ``n_groups`` is not
+            specified.
+
+    Examples:
+
+        .. code::
+
+            >>> from sklearn.model_selection import StratifiedKFold
+            >>> from cafeen.encoders import TargetEncoderCV
+            >>> cv = StratifiedKFold(n_splits=3, shuffle=True)
+            >>> encoder = TargetEncoderCV(cv, columns=['nom_9'], n_groups=3)
+    """
+
     def __init__(self, cv, columns=None, fill_value=None, min_count=0,
                  n_groups=None):
         self.cv = cv
@@ -218,6 +250,9 @@ class TargetEncoderCV(TransformerMixin, BaseEstimator):
         self.test_encoders = dict()
 
     def fit(self, x, y=None):
+        """Fit TargetEncoderCV to x.
+        """
+
         for col in self.columns:
             self.fold_encoders[col] = []
 
@@ -231,6 +266,9 @@ class TargetEncoderCV(TransformerMixin, BaseEstimator):
         return self
 
     def transform(self, x, y=None, is_val=False):
+        """Transform x using encoding.
+        """
+
         if self.min_count > 0:
             if is_val:
                 x = self.handle_outliers(x)
@@ -265,6 +303,12 @@ class TargetEncoderCV(TransformerMixin, BaseEstimator):
         return x
 
     def handle_outliers(self, x, y=None):
+        """Filter outliers.
+
+        Replace with NaN all categories with amount of
+        observations less than ``self.min_count``.
+        """
+
         df = x.copy()
         for col in self.columns:
             if y is None:
@@ -277,10 +321,16 @@ class TargetEncoderCV(TransformerMixin, BaseEstimator):
 
     @staticmethod
     def split_data(x, y):
+        """Split x into train and test sets.
+        """
+
         return x.loc[~y.isna()], y.loc[~y.isna()], x.loc[y.isna()]
 
     @staticmethod
     def replace_column(x, col, encoded):
+        """Replace column in DataFrame with its encoded values.
+        """
+
         encoded.columns = [col + '_']
         x = x.merge(encoded, how='left', left_index=True, right_index=True)
         x[col] = x[col + '_']

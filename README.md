@@ -4,28 +4,21 @@ This repository presents an approach used for solving [Kaggle Categorical Featur
 
 ### Cross-validation scheme
 
-To validate the results, I splitted train dataset (600000) into two sets 
+To validate the results, I splitted train dataset (600000 rows) into two sets 
 having 300000 rows each. I repeated this operation 4 times using 
 different `random_seed` and calculated CV score as a mean score over 4 iterations. 
 
 ```python
-    import numpy as np
-    from sklearn.model_selection import train_test_split
-        
-    scores = []
+from cafeen import config, steps
 
-    for seed in range(4):
-        train, test, train_y, test_y = train_test_split(
-            train, 
-            train['target'],
-            test_size=0.5,
-            shuffle=True,
-            random_state=seed,
-            stratify=train['target'])
+scores = []
 
-        scores += [validate(train, test, train_y, test_y)]
+for seed in [0, 1, 2, 3]:
+    train_x, test_x, train_y, test_y, test_id = steps.make_data(
+        path_to_train=config.path_to_train,
+        seed=seed)
 
-    score = np.mean(scores)
+    scores += [steps.train_predict(train_x, train_y, test_x, test_y=test_y)]
 ```
  
 ### Score improvements
@@ -42,14 +35,14 @@ CV: 0.78130, private score: 0.78527
 After hyperparameters optimization, I found the following configuration yields a highest CV score.
 
 ```python
-    from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression
 
-    estimator = LogisticRegression(
-        C=0.049,
-        class_weight={0: 1, 1: 1.42},
-        solver='liblinear',
-        fit_intercept=True,
-        penalty='l2')
+estimator = LogisticRegression(
+    C=0.049,
+    class_weight={0: 1, 1: 1.42},
+    solver='liblinear',
+    fit_intercept=True,
+    penalty='l2')
 ```    
 
 CV: 0.78519, private score: 0.78704
@@ -76,9 +69,9 @@ Then using target encoding with cross-validation, converted it to numeric and
 grouped in three groups with `qcut`.
 
 ```python
-    import pandas as pd
+import pandas as pd
 
-    x['nom_6'] = pd.qcut(x['nom_6'], 3, labels=False, duplicates='drop')
+x['nom_6'] = pd.qcut(x['nom_6'], 3, labels=False, duplicates='drop')
 ```
 
 CV: 0.78691, private score: 0.78796
