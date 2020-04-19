@@ -39,10 +39,13 @@ class BaseEncoder(TransformerMixin, BaseEstimator):
 
     @abc.abstractmethod
     def fit(self, x, y=None):
+        """Fit encoder to x.
+        """
+
         raise NotImplementedError()
 
     def transform(self, x):
-        """Apply encoding to features.
+        """Transform x using encoding.
 
         (1) Replace with NaN categories not found in train dataset,
         (2) filter outliers by replacing with NaN categories with
@@ -119,6 +122,13 @@ class LinearEncoder(BaseEncoder):
         normalize:
             If true, then normalize features by removing the mean
             and scaling to variance.
+
+    Examples:
+
+        .. code::
+
+            >>> from cafeen.encoders import LinearEncoder
+            >>> encoder = LinearEncoder(alpha=0.1, fill_value=0.187)
     """
 
     def __init__(self, alpha=0, fill_value=None, normalize=True):
@@ -126,6 +136,9 @@ class LinearEncoder(BaseEncoder):
         self.alpha = alpha
 
     def fit(self, x, y=None):
+        """Fit LinearEncoder to x.
+        """
+
         for col in x.columns:
             mask = ~x[col].isna()
             feature = x.loc[mask, col]
@@ -161,6 +174,13 @@ class TargetEncoder(BaseEncoder):
             with amount of observations less than ``min_count``.
         tol:
             Tolerance used to round the encoded values.
+
+    Examples:
+
+        .. code::
+
+            >>> from cafeen.encoders import TargetEncoder
+            >>> encoder = TargetEncoder(fill_value=0.187, tol='0.0001')
     """
 
     def __init__(self, fill_value=None, normalize=True, min_count=0, tol=None):
@@ -168,6 +188,9 @@ class TargetEncoder(BaseEncoder):
         self.tol = tol
 
     def fit(self, x, y=None):
+        """Fit TargetEncoder to x.
+        """
+
         df = pd.concat([x, y], axis=1)
 
         for col in x.columns:
