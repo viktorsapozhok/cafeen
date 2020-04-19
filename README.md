@@ -21,6 +21,10 @@ for seed in [0, 1, 2, 3]:
     scores += [steps.train_predict(train_x, train_y, test_x, test_y=test_y)]
 ```
  
+### Encoding pipeline
+
+The full encoding pipeline [can be seen here](https://github.com/viktorsapozhok/cafeen/blob/642bf49b79e44d88e38f8ec7b0a37f6431ded18b/cafeen/steps.py#L79). 
+ 
 ### Score improvements
 
 #### Baseline
@@ -57,14 +61,14 @@ CV: 0.78520, private score: 0.78704
 #### Ordinal encoding
 
 I used ordinal encoding for `ord_0`, `ord_1`, `ord_4`, `ord_5`, approximating 
-target average with a linear function. For `ord_4` and `ord_5` I removed outliers, 
+categories target mean with a linear function. For `ord_4` and `ord_5` I removed outliers, 
 categories with small amount of observations, before applying the linear regression. 
 
 CV: 0.78582, private score: 0.78727
 
 #### Grouping
 
-For `nom_6` feature I removed all categories which have less than 90 observations (replaced it with `nan`).
+For `nom_6` feature I removed all categories which have less than 90 observations (replaced it with `NaN`).
 Then using target encoding with cross-validation, converted it to numeric and
 grouped in three groups with `qcut`.
 
@@ -78,7 +82,7 @@ CV: 0.78691, private score: 0.78796
 
 #### Filtering
 
-For `nom_9` feature I removed all categories which have less than 60 observations (replaced it with `nan`)
+For `nom_9` feature I removed all categories which have less than 60 observations (replaced it with `NaN`)
 and combined together categories which have equal target average. 
 
 CV: 0.78691, private score: 0.78797
