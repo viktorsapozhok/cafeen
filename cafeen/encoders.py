@@ -106,6 +106,7 @@ class LinearEncoder(BaseEncoder):
     It applies target encoding to categories and then fits
     linear regression using categories ordinal position as an independent
     variable and calculated target mean as a dependent variable.
+    Each category is then encoded with a linear model prediction.
 
     Args:
         alpha:
@@ -144,6 +145,24 @@ class LinearEncoder(BaseEncoder):
 
 
 class TargetEncoder(BaseEncoder):
+    """Target encoding.
+
+    Replace each category with its corresponding probability
+    of the target.
+
+    Args:
+        fill_value:
+            Value to use to fill the missing values.
+        normalize:
+            If true, then normalize features by removing the mean
+            and scaling to variance.
+        min_count:
+            Use positive value to replace with NaN all the categories
+            with amount of observations less than ``min_count``.
+        tol:
+            Tolerance used to round the encoded values.
+    """
+
     def __init__(self, fill_value=None, normalize=True, min_count=0, tol=None):
         super().__init__(fill_value, normalize, min_count)
         self.tol = tol
