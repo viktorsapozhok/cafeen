@@ -81,8 +81,8 @@ def encode(train_x, train_y, test_x, is_val=False):
 
     Target encoding with cross-validation for ``nom_6``.
     Target encoding for ``nom_9``.
-    Ordinal encoding for ``ord_0``, ``ord_1``, ``ord_4``, ``ord_5``.
-    One-hor encoding for ``nominal_features``.
+    Modified target encoding for ``ord_0``, ``ord_1``, ``ord_4``, ``ord_5``.
+    One-hot encoding for ``nominal_features``.
     """
 
     test_y = pd.Series(data=[np.nan] * len(test_x), index=test_x.index)

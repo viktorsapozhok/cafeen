@@ -17,7 +17,7 @@ class BaseEncoder(TransformerMixin, BaseEstimator):
 
     Args:
         fill_value:
-            Value to use to fill missing values.
+            Value to use to fill the missing values.
         normalize:
             If true, then normalize features by removing the mean
             and scaling to variance.
@@ -78,7 +78,7 @@ class BaseEncoder(TransformerMixin, BaseEstimator):
     def handle_unknown(self, x):
         """Handle unknown categories.
 
-        Replace by NaN all categories not found in ``train``.
+        Replace with NaN all categories not found in ``train``.
         """
 
         for col in x.columns:
@@ -89,7 +89,7 @@ class BaseEncoder(TransformerMixin, BaseEstimator):
     def handle_outliers(self, x):
         """Filter outliers.
 
-        Replace by NaN all categories with amount of
+        Replace with NaN all categories with amount of
         observations less than ``self.min_count``.
         """
 
@@ -101,6 +101,25 @@ class BaseEncoder(TransformerMixin, BaseEstimator):
 
 
 class LinearEncoder(BaseEncoder):
+    """Modified target encoding.
+
+    It applies target encoding to categories and then fits
+    linear regression using categories ordinal position as an independent
+    variable and calculated target mean as a dependent variable.
+
+    Args:
+        alpha:
+            Value between 0 <= alpha <= 1, used to filter outliers
+            before fitting linear regression. Categories with
+            amount of observations less than alpha-level quantile
+            are not used when fitting the linear model.
+        fill_value:
+            Value to use to fill the missing values.
+        normalize:
+            If true, then normalize features by removing the mean
+            and scaling to variance.
+    """
+
     def __init__(self, alpha=0, fill_value=None, normalize=True):
         super().__init__(fill_value, normalize)
         self.alpha = alpha
