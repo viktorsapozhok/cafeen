@@ -13,6 +13,24 @@ import statsmodels.api as sm
 
 
 class BaseEncoder(TransformerMixin, BaseEstimator):
+    """Base class for all encoders.
+
+    Args:
+        fill_value:
+            Value to use to fill missing values.
+        normalize:
+            If true, then normalize features by removing the mean
+            and scaling to variance.
+        min_count:
+            Use positive value to replace with NaN all the categories
+            with amount of observations less than ``min_count``.
+
+    Attributes:
+        encoding:
+            Dictionary of various encodings applied to features of
+            the dataset. Feature names are used as dictionary keys.
+    """
+
     def __init__(self, fill_value=None, normalize=True, min_count=0):
         self.fill_value = fill_value
         self.normalize = normalize
@@ -24,6 +42,15 @@ class BaseEncoder(TransformerMixin, BaseEstimator):
         raise NotImplementedError()
 
     def transform(self, x):
+        """Apply encoding to features.
+
+        (1) Replace with NaN categories not found in train dataset,
+        (2) filter outliers by replacing with NaN categories with
+        small amount of observations, (3) apply encodings to features,
+        (4) fill missing values using ``fill_value``,
+        (5) normalize features.
+        """
+
         df = x.copy()
         # replace unknown categories with nan
         df = self.handle_unknown(df)
@@ -43,15 +70,29 @@ class BaseEncoder(TransformerMixin, BaseEstimator):
         return df
 
     def get_feature_names(self):
+        """Return names of the encoded features.
+        """
+
         return list(self.encoding.keys())
 
     def handle_unknown(self, x):
+        """Handle unknown categories.
+
+        Replace by NaN all categories not found in ``train``.
+        """
+
         for col in x.columns:
             mask = ~x[col].isin(self.encoding[col].index)
             x.loc[mask, col] = np.nan
         return x
 
     def handle_outliers(self, x):
+        """Filter outliers.
+
+        Replace by NaN all categories with amount of
+        observations less than ``self.min_count``.
+        """
+
         for col in x.columns:
             counts = x.groupby(col).size()
             index = counts[counts < self.min_count].index
