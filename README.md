@@ -23,8 +23,8 @@ for seed in [0, 1, 2, 3]:
  
 ### Encoding pipeline
 
-The full encoding pipeline [can be seen here](https://github.com/viktorsapozhok/cafeen/blob/642bf49b79e44d88e38f8ec7b0a37f6431ded18b/cafeen/steps.py#L79). 
- 
+The full encoding pipeline [can be seen here](/cafeen/steps.py). 
+
 ### Score improvements
 
 #### Baseline
