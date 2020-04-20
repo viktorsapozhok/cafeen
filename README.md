@@ -4,21 +4,28 @@ This repository presents an approach used for solving [Kaggle Categorical Featur
 
 ### Cross-validation scheme
 
-To validate the results, I splitted train dataset (600000 rows) into two sets 
+To validate the results, I divided train dataset (600000 rows) into two sets 
 having 300000 rows each. I repeated this operation 4 times using 
 different `random_seed` and calculated CV score as a mean score over 4 iterations. 
 
 ```python
+from sklearn.metrics import roc_auc_score
 from cafeen import config, steps
 
 scores = []
 
 for seed in [0, 1, 2, 3]:
+    # read data from files
     train_x, test_x, train_y, test_y, test_id = steps.make_data(
         path_to_train=config.path_to_train,
-        seed=seed)
-
-    scores += [steps.train_predict(train_x, train_y, test_x, test_y=test_y)]
+        seed=seed,
+        drop_features=['bin_3'])
+    # apply encoders
+    train_x, test_x = steps.encode(train_x, train_y, test_x, is_val=True)
+    # apply estimator
+    predicted = steps.train_predict(train_x, train_y, test_x)
+    # compute ROC AUC score
+    scores += [roc_auc_score(test_y.values, predicted)]
 ```
  
 ### Encoding pipeline

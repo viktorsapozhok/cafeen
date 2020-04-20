@@ -39,26 +39,29 @@ def cross_val():
     """
 
     for seed in [0, 1, 2, 3]:
+        # read data from files
         train_x, test_x, train_y, test_y, test_id = make_data(
             path_to_train=config.path_to_train,
             seed=seed,
             drop_features=['bin_3'])
-
-        score = train_predict(train_x, train_y, test_x, test_y=test_y)
+        # apply encoders
+        train_x, test_x = encode(train_x, train_y, test_x, is_val=True)
+        # apply estimator
+        predicted = train_predict(train_x, train_y, test_x)
+        # compute ROC AUC score
+        score = roc_auc_score(test_y.values, predicted)
         logger.info(f'score: {score:.6f}')
 
 
-def train_predict(train_x, train_y, test_x, test_y=None):
+def train_predict(train_x, train_y, test_x):
     """Train estimator and make a prediction.
 
     It applies various encodings to categorical features and
     trains the logistic regression over encoded dataset.
 
-    Returns ROC AUC computed on validation set.
+    Returns:
+        Predicted target probability.
     """
-
-    is_val = test_y is not None
-    train_x, test_x = encode(train_x, train_y, test_x, is_val=is_val)
 
     estimator = LogisticRegression(
         random_state=2020,
@@ -71,9 +74,7 @@ def train_predict(train_x, train_y, test_x, test_y=None):
         verbose=0)
 
     predicted = estimator.fit(train_x, train_y).predict_proba(test_x)
-    score = roc_auc_score(test_y.values, predicted[:, 1])
-
-    return score
+    return predicted[:, 1]
 
 
 def encode(train_x, train_y, test_x, is_val=False):
@@ -83,6 +84,9 @@ def encode(train_x, train_y, test_x, is_val=False):
     Target encoding for ``nom_9``.
     Modified target encoding for ``ord_0``, ``ord_1``, ``ord_4``, ``ord_5``.
     One-hot encoding for ``nominal_features``.
+
+    Returns:
+        Encoded train and test sets.
     """
 
     test_y = pd.Series(data=[np.nan] * len(test_x), index=test_x.index)
