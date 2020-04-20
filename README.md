@@ -76,8 +76,7 @@ CV: 0.78582, private score: 0.78727
 #### Grouping
 
 For `nom_6` feature I removed all categories which have less than 90 observations (replaced it with `NaN`).
-Then using target encoding with cross-validation, converted it to numeric and
-grouped in three groups with `qcut`.
+Then using K-Fold target encoding, converted it to numeric and grouped in three groups with `qcut`.
 
 ```python
 import pandas as pd
